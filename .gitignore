@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Databases and SQLite
+/prisma/dev.sqlite
+/prisma/dev.sqlite-journal
+*.sqlite
+*.sqlite-journal
+*.db
+
+# Build outputs & caches
+/.cache/
+/build/
+/app/build/
+/public/build/
+/public/_dev/
+/dist/
+dist/
+/extensions/*/dist/
+.eslintcache
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Shopify CLI files
+.shopify/
+.shopify.lock
+
+# Framework generated files
+.react-router/
+.vite/
+
+# IDE & Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/extensions.json
+.idea/
+
+# AI IDE & Local Agent directories
+.agents/
+.cursor/
+.gemini/

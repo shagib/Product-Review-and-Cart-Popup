@@ -1,0 +1,52 @@
+{% comment %} 
+  Shopify Theme Block for Product Single Page 
+{% endcomment %}
+
+{% assign is_review_active = shop.metafields.app_settings.is_review_active %}
+ 
+{% if is_review_active == true or is_review_active == 'true' %}
+  <div class="product-review-container" 
+      data-shop="{{ shop.permanent_domain }}" 
+      data-product-id="{{ product.id }}">
+    <div id="shopify-product-reviews" style="margin-top: 30px; border-top: 1px solid #ccc; padding-top: 20px;">
+      <h3>Customer Reviews</h3>
+      <div id="reviews-list">
+        <p>Loading reviews...</p>
+      </div>
+    </div>
+
+    <div class="review-form-wrapper" style="margin-top: 25px;">
+      <h4>Write a Review</h4>
+      <form id="submit-review-form">
+        <div style="margin-bottom: 10px;">
+          <label>Rating:</label><br/>
+          <select id="rating">
+            <option value="5">5 Stars ⭐⭐⭐⭐⭐</option>
+            <option value="4">4 Stars ⭐⭐⭐⭐</option>
+            <option value="3">3 Stars ⭐⭐⭐</option>
+            <option value="2">2 Stars ⭐⭐</option>
+            <option value="1">1 Star ⭐</option>
+          </select>
+        </div>
+        <div style="margin-bottom: 10px;">
+          <label>Your Name:</label><br/>
+          <input type="text" id="customerName" required style="width: 100%; padding: 8px;" />
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label>Your Review:</label><br/>
+          <textarea id="comment" required style="width: 100%; padding: 8px;"></textarea>
+        </div>
+        <button type="submit" style="padding: 10px 20px; cursor: pointer;">Submit Review</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="{{ 'review.js' | asset_url }}" defer></script>
+{% endif %}
+{% schema %}
+{
+  "name": "Product Review Box",
+  "target": "section",
+  "settings": []
+}
+{% endschema %}

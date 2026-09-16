@@ -1,0 +1,37 @@
+{
+  "ratings": {
+    "stars": {
+      "label": "Ratings"
+    },
+    "home": {
+      "recommendationText": "Recommended Product!"
+    }
+  },
+  "cart_popup": {
+    "empty_heading": "Your cart is empty",
+    "empty_message": "Add something you love to get started.",
+    "continue_shopping": "Continue shopping",
+    "close": "Close cart",
+    "delete": "Delete items",
+    "select_all": "Select all",
+    "delete_selected": "Delete selected",
+    "cancel": "Cancel",
+    "quantity": "Quantity",
+    "decrease_quantity": "Decrease quantity",
+    "increase_quantity": "Increase quantity",
+    "remove": "Remove",
+    "subtotal": "Subtotal",
+    "total": "Total",
+    "checkout_hint": "Taxes and shipping are calculated at checkout.",
+    "order_note": "Special request / Note",
+    "add_special_request": "Add Special Request",
+    "edit_special_request": "Edit Special Request",
+    "voucher_applied": "Voucher Applied",
+    "delivery_fee": "Delivery Fee",
+    "free": "Free",
+    "cart_updated": "Cart updated.",
+    "cart_error": "We couldn't update your cart. Please try again.",
+    "free_delivery_remaining": "Spend {{ amount }} more for free delivery.",
+    "free_delivery_unlocked": "You've unlocked free delivery."
+  }
+}

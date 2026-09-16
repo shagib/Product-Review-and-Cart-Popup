@@ -1,0 +1,173 @@
+<script id="cart-popup-settings-{{ block.id }}" type="application/json">
+  {
+    "instanceId": {{ block.id | json }},
+    "cartUrl": {{ routes.cart_url | json }},
+    "checkoutUrl": {{ routes.root_url | append: 'checkout' | json }},
+    "title": {{ block.settings.title | json }},
+    "checkoutLabel": {{ block.settings.checkout_label | json }},
+    "position": {{ block.settings.position | json }},
+    "panelWidth": {{ block.settings.panel_width | json }},
+    "showHeaderIcon": {{ block.settings.show_header_icon | json }},
+    "openAfterAdd": {{ block.settings.open_after_add | json }},
+    "showOrderNote": {{ block.settings.show_order_note | json }},
+    "showVoucher": {{ block.settings.show_voucher | json }},
+    "voucherCode": {{ block.settings.voucher_code | json }},
+    "customIconUrl": {% if block.settings.custom_icon != blank %}{{ block.settings.custom_icon | image_url: width: 64 | json }}{% else %}null{% endif %},
+    "freeDeliveryThreshold": {{ block.settings.free_delivery_threshold | times: 100 | json }},
+    "colors": {
+      "surface": {{ block.settings.surface_color | json }},
+      "accent": {{ block.settings.accent_color | json }},
+      "text": {{ block.settings.text_color | json }}
+    },
+    "translations": {
+      "emptyHeading": {{ 'cart_popup.empty_heading' | t | json }},
+      "emptyMessage": {{ 'cart_popup.empty_message' | t | json }},
+      "continueShopping": {{ 'cart_popup.continue_shopping' | t | json }},
+      "close": {{ 'cart_popup.close' | t | json }},
+      "delete": {{ 'cart_popup.delete' | t | json }},
+      "selectAll": {{ 'cart_popup.select_all' | t | json }},
+      "deleteSelected": {{ 'cart_popup.delete_selected' | t | json }},
+      "cancel": {{ 'cart_popup.cancel' | t | json }},
+      "quantity": {{ 'cart_popup.quantity' | t | json }},
+      "decreaseQuantity": {{ 'cart_popup.decrease_quantity' | t | json }},
+      "increaseQuantity": {{ 'cart_popup.increase_quantity' | t | json }},
+      "remove": {{ 'cart_popup.remove' | t | json }},
+      "subtotal": {{ 'cart_popup.subtotal' | t | json }},
+      "total": {{ 'cart_popup.total' | t | json }},
+      "checkoutHint": {{ 'cart_popup.checkout_hint' | t | json }},
+      "orderNote": {{ 'cart_popup.order_note' | t | json }},
+      "addSpecialRequest": {{ 'cart_popup.add_special_request' | t | json }},
+      "editSpecialRequest": {{ 'cart_popup.edit_special_request' | t | json }},
+      "voucherApplied": {{ 'cart_popup.voucher_applied' | t | json }},
+      "deliveryFee": {{ 'cart_popup.delivery_fee' | t | json }},
+      "free": {{ 'cart_popup.free' | t | json }},
+      "cartUpdated": {{ 'cart_popup.cart_updated' | t | json }},
+      "cartError": {{ 'cart_popup.cart_error' | t | json }},
+      "freeDeliveryRemaining": {{ 'cart_popup.free_delivery_remaining' | t | json }},
+      "freeDeliveryUnlocked": {{ 'cart_popup.free_delivery_unlocked' | t | json }}
+    }
+  }
+</script>
+<script src="{{ 'cart-popup.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Cart popup",
+  "target": "head",
+  "stylesheet": "cart-popup.css",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Content"
+    },
+    {
+      "type": "text",
+      "id": "title",
+      "label": "Cart heading",
+      "default": "Cart"
+    },
+    {
+      "type": "text",
+      "id": "checkout_label",
+      "label": "Checkout button label",
+      "default": "Go to Checkout"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_order_note",
+      "label": "Enable special request / order note",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_voucher",
+      "label": "Show voucher / discount bar",
+      "default": true
+    },
+    {
+      "type": "text",
+      "id": "voucher_code",
+      "label": "Voucher badge text",
+      "default": "WELCOME"
+    },
+    {
+      "type": "range",
+      "id": "free_delivery_threshold",
+      "label": "Free delivery threshold (store currency)",
+      "min": 0,
+      "max": 1000,
+      "step": 10,
+      "default": 0
+    },
+    {
+      "type": "header",
+      "content": "Position & Layout"
+    },
+    {
+      "type": "select",
+      "id": "position",
+      "label": "Popup slide position",
+      "options": [
+        { "value": "right", "label": "Right side" },
+        { "value": "left", "label": "Left side" },
+        { "value": "top", "label": "Top slide" },
+        { "value": "bottom", "label": "Bottom drawer" }
+      ],
+      "default": "right"
+    },
+    {
+      "type": "range",
+      "id": "panel_width",
+      "label": "Popup width (desktop)",
+      "min": 320,
+      "max": 680,
+      "step": 10,
+      "unit": "px",
+      "default": 420
+    },
+    {
+      "type": "checkbox",
+      "id": "open_after_add",
+      "label": "Open popup after adding an item",
+      "default": true
+    },
+    {
+      "type": "header",
+      "content": "Header Cart Icon"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_header_icon",
+      "label": "Replace theme cart icon with popup icon",
+      "default": true
+    },
+    {
+      "type": "image_picker",
+      "id": "custom_icon",
+      "label": "Custom cart icon (PNG, JPG, SVG)"
+    },
+    {
+      "type": "header",
+      "content": "Colours"
+    },
+    {
+      "type": "color",
+      "id": "surface_color",
+      "label": "Background color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "accent_color",
+      "label": "Button and accent color",
+      "default": "#e4002b"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text color",
+      "default": "#171717"
+    }
+  ]
+}
+{% endschema %}

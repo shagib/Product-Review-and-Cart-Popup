@@ -1,0 +1,727 @@
+/* ==========================================================================
+   Shopify Cart Popup Stylesheet
+   Modern, responsive slide-out cart drawer matching mobile & desktop standards.
+   ========================================================================== */
+
+:root {
+  --cart-popup-surface: #ffffff;
+  --cart-popup-accent: #e4002b;
+  --cart-popup-accent-hover: #c90026;
+  --cart-popup-text: #171717;
+  --cart-popup-muted: #71717a;
+  --cart-popup-border: rgba(0, 0, 0, 0.08);
+  --cart-popup-pill-bg: #f3f4f6;
+  --cart-popup-width: 420px;
+}
+
+.cart-popup {
+  color: var(--cart-popup-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.cart-popup,
+.cart-popup * {
+  box-sizing: border-box;
+}
+
+/* Fix: Guarantee elements with hidden attribute are NEVER displayed */
+.cart-popup [hidden] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   Scrim / Backdrop
+   -------------------------------------------------------------------------- */
+.cart-popup__scrim {
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  inset: 0;
+  opacity: 0;
+  position: fixed;
+  transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1), visibility 240ms;
+  visibility: hidden;
+  z-index: 2147483000;
+  border: none;
+  cursor: pointer;
+}
+
+.cart-popup.is-open .cart-popup__scrim {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* --------------------------------------------------------------------------
+   Drawer Panel (Base & Positioning)
+   -------------------------------------------------------------------------- */
+.cart-popup__panel {
+  background: var(--cart-popup-surface);
+  box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  transition: transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 2147483001;
+  overflow: hidden;
+}
+
+/* Right Slide (Default) */
+.cart-popup--right .cart-popup__panel {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--cart-popup-width);
+  max-width: 100vw;
+  height: 100dvh;
+  transform: translateX(100%);
+}
+
+.cart-popup--right.is-open .cart-popup__panel {
+  transform: translateX(0);
+}
+
+/* Left Slide */
+.cart-popup--left .cart-popup__panel {
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--cart-popup-width);
+  max-width: 100vw;
+  height: 100dvh;
+  transform: translateX(-100%);
+}
+
+.cart-popup--left.is-open .cart-popup__panel {
+  transform: translateX(0);
+}
+
+/* Top Slide */
+.cart-popup--top .cart-popup__panel {
+  top: 0;
+  left: 50%;
+  width: var(--cart-popup-width);
+  max-width: 100vw;
+  max-height: min(88dvh, 760px);
+  border-radius: 0 0 24px 24px;
+  transform: translate(-50%, -100%);
+}
+
+.cart-popup--top.is-open .cart-popup__panel {
+  transform: translate(-50%, 0);
+}
+
+/* Bottom Drawer */
+.cart-popup--bottom .cart-popup__panel {
+  bottom: 0;
+  left: 50%;
+  top: auto;
+  width: var(--cart-popup-width);
+  max-width: 100vw;
+  max-height: min(88dvh, 760px);
+  border-radius: 24px 24px 0 0;
+  transform: translate(-50%, 100%);
+}
+
+.cart-popup--bottom.is-open .cart-popup__panel {
+  transform: translate(-50%, 0);
+}
+
+/* Prevent body scroll when popup is active */
+body.cart-popup-lock {
+  overflow: hidden !important;
+  touch-action: none;
+}
+
+/* --------------------------------------------------------------------------
+   Header (3-Column Layout: Close, Centered Title, Trash)
+   -------------------------------------------------------------------------- */
+.cart-popup__header {
+  align-items: center;
+  border-bottom: 1px solid var(--cart-popup-border);
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  padding: 12px 18px;
+  min-height: 64px;
+  background: var(--cart-popup-surface);
+  flex-shrink: 0;
+}
+
+.cart-popup__title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+  text-align: center;
+  letter-spacing: -0.02em;
+}
+
+.cart-popup__icon-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--cart-popup-text);
+  cursor: pointer;
+  display: inline-flex;
+  height: 40px;
+  width: 40px;
+  justify-content: center;
+  padding: 0;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.cart-popup__icon-button:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.cart-popup__icon-button--trash {
+  color: var(--cart-popup-muted);
+}
+
+.cart-popup__icon-button--trash:hover {
+  color: var(--cart-popup-accent);
+  background: rgba(228, 0, 43, 0.08);
+}
+
+/* --------------------------------------------------------------------------
+   Bulk Delete Action Bar (Appears when Trash clicked)
+   -------------------------------------------------------------------------- */
+.cart-popup__bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  background: #fff1f2;
+  border-bottom: 1px solid #fecdd3;
+  animation: cartPopupSlideDown 180ms ease;
+}
+
+@keyframes cartPopupSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.cart-popup__bulk-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #9f1239;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cart-popup__bulk-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cart-popup__bulk-cancel {
+  background: transparent;
+  border: none;
+  font-size: 0.85rem;
+  color: #4b5563;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 6px;
+}
+
+.cart-popup__bulk-cancel:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.cart-popup__bulk-delete-btn {
+  background: #e11d48;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 150ms;
+}
+
+.cart-popup__bulk-delete-btn:hover:not(:disabled) {
+  background: #be123c;
+}
+
+.cart-popup__bulk-delete-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Checkbox Styling */
+.cart-popup__checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px !important;
+  height: 20px;
+  border: 2px solid #cbd5e1;
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+  position: relative;
+  transition: all 150ms ease;
+  background-color: #fff;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.cart-popup__checkbox:checked {
+  background-color: var(--cart-popup-accent);
+  border-color: var(--cart-popup-accent);
+}
+
+.cart-popup__checkbox:checked::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 5px;
+  height: 10px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* --------------------------------------------------------------------------
+   Content & Line Items
+   -------------------------------------------------------------------------- */
+.cart-popup__content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 18px;
+}
+
+.cart-popup__items {
+  display: flex;
+  flex-direction: column;
+}
+
+.cart-popup__line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--cart-popup-border);
+  transition: background-color 150ms ease;
+}
+
+.cart-popup__line-checkbox {
+  display: none;
+}
+
+.cart-popup--selection-mode .cart-popup__line-checkbox {
+  display: flex;
+  align-items: center;
+}
+
+.cart-popup__image-link {
+  flex-shrink: 0;
+}
+
+.cart-popup__image {
+  background: #f4f4f5;
+  border-radius: 14px;
+  display: block;
+  height: 84px;
+  width: 84px;
+  object-fit: cover;
+}
+
+.cart-popup__line-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.cart-popup__line-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.cart-popup__product-link {
+  color: var(--cart-popup-text);
+  font-size: 0.98rem;
+  font-weight: 650;
+  line-height: 1.3;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cart-popup__product-link:hover {
+  color: var(--cart-popup-accent);
+}
+
+.cart-popup__variant {
+  color: var(--cart-popup-muted);
+  font-size: 0.82rem;
+  margin: 0;
+  line-height: 1.3;
+}
+
+/* Special Request Link / Note */
+.cart-popup__special-request-btn {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  color: var(--cart-popup-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  align-self: flex-start;
+}
+
+.cart-popup__special-request-btn:hover {
+  color: var(--cart-popup-text);
+}
+
+.cart-popup__line-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.cart-popup__price {
+  font-size: 1.05rem;
+  font-weight: 750;
+  color: var(--cart-popup-text);
+}
+
+/* Pill-Shaped Quantity Selector */
+.cart-popup__quantity {
+  align-items: center;
+  background: var(--cart-popup-pill-bg);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px 8px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.cart-popup__quantity-button {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--cart-popup-text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 1.15rem;
+  font-weight: 600;
+  height: 28px;
+  width: 28px;
+  justify-content: center;
+  padding: 0;
+  transition: background 150ms ease, transform 100ms ease;
+  user-select: none;
+}
+
+.cart-popup__quantity-button:hover {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.cart-popup__quantity-button:active {
+  transform: scale(0.92);
+}
+
+.cart-popup__quantity-value {
+  font-size: 0.92rem;
+  font-weight: 700;
+  min-width: 20px;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------------------
+   Voucher Bar (Matching Mockup)
+   -------------------------------------------------------------------------- */
+.cart-popup__voucher-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f9fafb;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-top: 14px;
+  border: 1px dashed #d1d5db;
+}
+
+.cart-popup__voucher-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 650;
+  font-size: 0.92rem;
+}
+
+.cart-popup__voucher-badge {
+  background: rgba(0, 176, 91, 0.1);
+  color: #008a47;
+  font-size: 0.85rem;
+  font-weight: 750;
+  padding: 4px 10px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Delivery Progress Bar
+   -------------------------------------------------------------------------- */
+.cart-popup__delivery {
+  padding: 12px 0 6px;
+}
+
+.cart-popup__delivery-message {
+  font-size: 0.82rem;
+  color: var(--cart-popup-muted);
+  margin: 0 0 6px;
+  font-weight: 500;
+}
+
+.cart-popup__progress {
+  background: #e4e4e7;
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.cart-popup__progress-bar {
+  background: var(--cart-popup-accent);
+  border-radius: inherit;
+  height: 100%;
+  transition: width 200ms ease;
+}
+
+/* --------------------------------------------------------------------------
+   Collapsible Note / Special Request Area
+   -------------------------------------------------------------------------- */
+.cart-popup__note-drawer {
+  padding: 10px 0;
+  border-top: 1px solid var(--cart-popup-border);
+  margin-top: 10px;
+}
+
+.cart-popup__note-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--cart-popup-muted);
+  user-select: none;
+}
+
+.cart-popup__note-textarea {
+  width: 100%;
+  height: 64px;
+  border: 1px solid var(--cart-popup-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+  margin-top: 6px;
+  outline: none;
+}
+
+.cart-popup__note-textarea:focus {
+  border-color: var(--cart-popup-accent);
+}
+
+/* --------------------------------------------------------------------------
+   Empty State
+   -------------------------------------------------------------------------- */
+.cart-popup__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 24px;
+  text-align: center;
+}
+
+.cart-popup__empty-icon {
+  margin-bottom: 16px;
+  color: #a1a1aa;
+}
+
+.cart-popup__empty h3 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.cart-popup__empty p {
+  color: var(--cart-popup-muted);
+  font-size: 0.9rem;
+  margin: 0 0 20px;
+  max-width: 260px;
+}
+
+.cart-popup__continue {
+  background: var(--cart-popup-text);
+  color: #ffffff;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 650;
+  padding: 12px 28px;
+  transition: opacity 150ms ease;
+}
+
+.cart-popup__continue:hover {
+  opacity: 0.88;
+}
+
+/* --------------------------------------------------------------------------
+   Footer (Summary Rows & Large Red Checkout Button)
+   -------------------------------------------------------------------------- */
+.cart-popup__footer {
+  border-top: 1px solid var(--cart-popup-border);
+  padding: 16px 18px 20px;
+  background: var(--cart-popup-surface);
+  flex-shrink: 0;
+}
+
+.cart-popup__summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+  color: var(--cart-popup-muted);
+}
+
+.cart-popup__summary-row--delivery {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.cart-popup__summary-row--total {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--cart-popup-text);
+  margin-top: 8px;
+  margin-bottom: 14px;
+}
+
+/* Big Pill Red Button matching the mockup */
+.cart-popup__checkout {
+  align-items: center;
+  background: var(--cart-popup-accent);
+  border: none;
+  border-radius: 999px;
+  color: #ffffff;
+  cursor: pointer;
+  display: flex;
+  font-size: 1.05rem;
+  font-weight: 750;
+  justify-content: center;
+  min-height: 52px;
+  padding: 14px 24px;
+  text-decoration: none;
+  transition: background-color 160ms ease, transform 100ms ease;
+  width: 100%;
+  position: relative;
+}
+
+.cart-popup__checkout:hover {
+  background: var(--cart-popup-accent-hover);
+}
+
+.cart-popup__checkout:active {
+  transform: scale(0.99);
+}
+
+.cart-popup__checkout-arrow {
+  position: absolute;
+  right: 22px;
+  font-size: 1.25rem;
+  font-weight: bold;
+}
+
+.cart-popup__status {
+  font-size: 0.78rem;
+  color: var(--cart-popup-muted);
+  text-align: center;
+  margin: 4px 0 0;
+  min-height: 16px;
+}
+
+/* --------------------------------------------------------------------------
+   Header Trigger in Theme Nav
+   -------------------------------------------------------------------------- */
+.cart-popup__header-trigger {
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: currentColor;
+  cursor: pointer;
+  display: inline-flex;
+  position: relative;
+  padding: 6px;
+}
+
+.cart-popup__custom-icon {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.cart-popup__count {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  background: var(--cart-popup-accent);
+  color: #ffffff;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 750;
+  min-width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Mobile Adjustments
+   -------------------------------------------------------------------------- */
+@media (max-width: 640px) {
+
+  .cart-popup--right .cart-popup__panel,
+  .cart-popup--left .cart-popup__panel,
+  .cart-popup--top .cart-popup__panel,
+  .cart-popup--bottom .cart-popup__panel {
+    width: 100% !important;
+    max-width: 100vw !important;
+  }
+}
