@@ -1,82 +1,57 @@
 /**
- * ============================================================================
- * Shopify Cart Popup Drawer Engine
- * 
- * Features:
- * - Optimistic UI Updates: Instant quantity updates (+ / -) with zero UI lag.
- * - Bulk Deletion Mode: Header trash icon activates checkboxes for mass removal.
- * - Dynamic Position: Supports 'right', 'left', 'top', and 'bottom' drawer views.
- * - Custom Icon Support: Displays user-uploaded image icon or fallback SVG.
- * - Theme Integration: Intercepts product forms and global fetch /cart mutations.
- * ============================================================================
+ * cart-popup.js  ← Main Bootstrap & Core Class
+ *
+ * Responsibilities:
+ *   1. Build the drawer HTML shell (structure only)
+ *   2. Cache DOM references
+ *   3. Bind all user events (delegated click, keyboard, resize)
+ *   4. Manage open / close / bulk-delete mode state
+ *   5. Responsive layout switching
+ *   6. Bootstrap instances from <script type="application/json"> tags
+ *
+ * Behaviour methods come from two companion files loaded BEFORE this one:
+ *   - cart-popup-icons.js   → window.CartPopupIcons
+ *   - cart-popup-api.js     → window.CartPopupApi  (API & discount logic)
+ *   - cart-popup-ui.js      → window.CartPopupUi   (rendering & money helpers)
+ *
+ * All companion methods are merged into CartPopup.prototype via Object.assign()
+ * at the bottom of this file, so every method is available on `this`.
  */
-
 (() => {
-  // SVG Icons used across the drawer UI
-  const ICONS = {
-    cart: `
-      <svg aria-hidden="true" fill="none" height="22" viewBox="0 0 24 24" width="22">
-        <path d="M3 4h2l2.1 10.1a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L20.5 7H6" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" />
-        <circle cx="10" cy="20" fill="currentColor" r="1.2" />
-        <circle cx="18" cy="20" fill="currentColor" r="1.2" />
-      </svg>`,
-    close: `
-      <svg aria-hidden="true" fill="none" height="20" viewBox="0 0 24 24" width="20">
-        <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-linecap="round" stroke-width="2" />
-      </svg>`,
-    trash: `
-      <svg aria-hidden="true" fill="none" height="20" viewBox="0 0 24 24" width="20">
-        <path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" />
-      </svg>`,
-    voucher: `
-      <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
-        <rect x="2" y="6" width="20" height="12" rx="2" stroke="currentColor" stroke-width="1.8"/>
-        <path d="M2 12h3M19 12h3M12 6v12" stroke="currentColor" stroke-width="1.8" stroke-dasharray="2 2"/>
-      </svg>`,
-    note: `
-      <svg aria-hidden="true" fill="none" height="15" viewBox="0 0 24 24" width="15">
-        <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>`
-  };
-
-  /**
-   * Helper function to safely escape HTML strings to prevent XSS vulnerabilities
-   */
-  const escapeHtml = (value) =>
-    String(value || "").replace(/[&<>'"]/g, (char) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      "'": "&#39;",
-      "\"": "&quot;",
-    })[char]);
+  const esc = (v) =>
+    String(v || "").replace(/[&<>'"]/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
+    })[c]);
 
   class CartPopup {
-    /**
-     * @param {Object} settings - Configuration injected from cart-popup.liquid schema
-     */
     constructor(settings) {
       this.settings = settings;
-      this.cart = { item_count: 0, items: [], total_price: 0 };
+      // Use Liquid-injected cart for zero-delay initial render
+      this.cart = settings.initialCart || { item_count: 0, items: [], total_price: 0 };
+
       this.root = null;
       this.lastFocusedElement = null;
-
-      // Selection & Bulk Deletion State
       this.isDeleteMode = false;
       this.selectedKeys = new Set();
-
-      // Debounce Timers for fast snappiness without overwhelming Shopify APIs
       this.debounceTimers = new Map();
       this.noteSaveTimer = null;
       this.originalFetch = window.fetch.bind(window);
+
+      // Restore any previously applied discount from session
+      try {
+        this.appliedDiscount = (sessionStorage.getItem("cart_popup_discount") || "").trim();
+      } catch {
+        this.appliedDiscount = "";
+      }
+
+      this.BREAKPOINTS = { mobile: 767, tablet: 1024 };
     }
 
-    /**
-     * Entry point: Builds interface, binds events, and synchronizes initial cart state.
-     */
     init() {
       this.createInterface();
+      this.applyResponsiveLayout();
       this.bindEvents();
+      this.bindResizeListener();
       this.replaceThemeCartLinks();
       this.hideThemeCartInterfaces();
       this.watchThemeChanges();
@@ -84,587 +59,419 @@
       this.refresh();
     }
 
-    /**
-     * Creates and mounts the DOM elements for the drawer according to settings.
-     */
     createInterface() {
-      const popupId = `cart-popup-panel-${this.settings.instanceId}`;
-      const translation = this.settings.translations;
+      const ICONS = window.CartPopupIcons;
+      const id = `cart-popup-panel-${this.settings.instanceId}`;
+      const t = this.settings.translations;
 
       this.root = document.createElement("div");
-      this.root.className = `cart-popup cart-popup--${this.settings.position || "right"}`;
+      this.root.className = "cart-popup";
       this.root.style.setProperty("--cart-popup-surface", this.settings.colors.surface);
       this.root.style.setProperty("--cart-popup-accent", this.settings.colors.accent);
       this.root.style.setProperty("--cart-popup-text", this.settings.colors.text);
-      this.root.style.setProperty("--cart-popup-width", `${this.settings.panelWidth || 420}px`);
 
       this.root.innerHTML = `
-        <button class="cart-popup__scrim" data-cart-popup-close type="button" aria-label="${escapeHtml(translation.close)}"></button>
-        <aside class="cart-popup__panel" id="${escapeHtml(popupId)}" aria-hidden="true" aria-labelledby="${escapeHtml(popupId)}-title" role="dialog">
-          
-          <!-- 1. Header: 3-column layout (Close button, Center Title, Trash icon) -->
-          <header class="cart-popup__header">
-            <button class="cart-popup__icon-button" data-cart-popup-close type="button" aria-label="${escapeHtml(translation.close)}">
+        <button class="cart-popup-scrim" data-cart-popup-close type="button" aria-label="${esc(t.close)}"></button>
+        <aside class="cart-popup-panel" id="${esc(id)}" aria-hidden="true"
+               aria-labelledby="${esc(id)}-title" role="dialog">
+
+          <!-- Header -->
+          <header class="cart-popup-header">
+            <button class="cart-popup-icon-button" data-cart-popup-close type="button" aria-label="${esc(t.close)}">
               ${ICONS.close}
             </button>
-            <h2 class="cart-popup__title" id="${escapeHtml(popupId)}-title">${escapeHtml(this.settings.title)}</h2>
-            <button class="cart-popup__icon-button cart-popup__icon-button--trash" data-cart-popup-toggle-delete type="button" aria-label="${escapeHtml(translation.delete)}" title="${escapeHtml(translation.delete)}">
+            <h2 class="cart-popup-title" id="${esc(id)}-title">${esc(this.settings.title)}</h2>
+            <button class="cart-popup-icon-button cart-popup-icon-button-trash"
+                    data-cart-popup-toggle-delete type="button"
+                    aria-label="${esc(t.delete)}" title="${esc(t.delete)}">
               ${ICONS.trash}
             </button>
           </header>
 
-          <!-- 2. Bulk Action Bar (Revealed when Trash button is clicked) -->
-          <div class="cart-popup__bulk-bar" data-cart-popup-bulk-bar hidden>
-            <label class="cart-popup__bulk-select-all">
-              <input type="checkbox" class="cart-popup__checkbox" data-cart-popup-select-all />
-              <span>${escapeHtml(translation.selectAll)}</span>
+          <!-- Bulk Action Bar -->
+          <div class="cart-popup-bulk-bar" data-cart-popup-bulk-bar hidden>
+            <label class="cart-popup-bulk-select-all">
+              <input type="checkbox" class="cart-popup-checkbox" data-cart-popup-select-all />
+              <span>${esc(t.selectAll)}</span>
             </label>
-            <div class="cart-popup__bulk-actions">
-              <button class="cart-popup__bulk-cancel" data-cart-popup-cancel-delete type="button">
-                ${escapeHtml(translation.cancel)}
+            <div class="cart-popup-bulk-actions">
+              <button class="cart-popup-bulk-cancel" data-cart-popup-cancel-delete type="button">
+                ${esc(t.cancel)}
               </button>
-              <button class="cart-popup__bulk-delete-btn" data-cart-popup-execute-delete type="button" disabled>
-                ${escapeHtml(translation.deleteSelected)}
+              <button class="cart-popup-bulk-delete-btn" data-cart-popup-execute-delete type="button" disabled>
+                ${esc(t.deleteSelected)}
               </button>
             </div>
           </div>
 
-          <!-- 3. Main Cart Content Area -->
-          <div class="cart-popup__content">
-            <p class="cart-popup__status" aria-live="polite"></p>
-            
-            <!-- Items Container -->
-            <div class="cart-popup__items"></div>
+          <!-- Main Content -->
+          <div class="cart-popup-content">
+            <p class="cart-popup-status" aria-live="polite"></p>
+            <div class="cart-popup-items"></div>
 
-            <!-- Empty State (Guaranteed hidden when items are present) -->
-            <div class="cart-popup__empty" hidden>
-              <div class="cart-popup__empty-icon">${ICONS.cart}</div>
-              <h3>${escapeHtml(translation.emptyHeading)}</h3>
-              <p>${escapeHtml(translation.emptyMessage)}</p>
-              <button class="cart-popup__continue" data-cart-popup-close type="button">${escapeHtml(translation.continueShopping)}</button>
+            <!-- Empty State -->
+            <div class="cart-popup-empty" hidden>
+              <div class="cart-popup-empty-icon">${ICONS.cart}</div>
+              <h3>${esc(t.emptyHeading)}</h3>
+              <p>${esc(t.emptyMessage)}</p>
+              <button class="cart-popup-continue" data-cart-popup-close type="button">
+                ${esc(t.continueShopping)}
+              </button>
             </div>
 
-            <!-- Optional Voucher Banner (Matching mockup) -->
+            <!-- Voucher / Discount -->
             ${this.settings.showVoucher ? `
-              <div class="cart-popup__voucher-card" data-cart-popup-voucher>
-                <div class="cart-popup__voucher-left">
-                  ${ICONS.voucher}
-                  <span>${escapeHtml(translation.voucherApplied)}</span>
+              <div class="cart-popup-voucher-wrapper" data-cart-popup-voucher-wrapper>
+                <div class="cart-popup-voucher-card" data-cart-popup-voucher
+                     role="button" tabindex="0"
+                     aria-label="${esc(t.haveVoucher || 'Add voucher')}"></div>
+                <div class="cart-popup-voucher-form" data-cart-popup-voucher-form hidden>
+                  <div class="cart-popup-voucher-input-row">
+                    <input type="text" class="cart-popup-voucher-input"
+                           data-cart-popup-voucher-input
+                           placeholder="${esc(t.enterVoucherCode || 'Enter promo code')}" />
+                    <button type="button" class="cart-popup-voucher-apply-btn"
+                            data-cart-popup-apply-voucher>
+                      ${esc(t.apply || 'Apply')}
+                    </button>
+                  </div>
+                  <div class="cart-popup-voucher-message" data-cart-popup-voucher-msg hidden></div>
                 </div>
-                <span class="cart-popup__voucher-badge">${escapeHtml(this.settings.voucherCode || "WELCOME")} &rsaquo;</span>
               </div>
             ` : ""}
 
-            <!-- Collapsible Order Note / Special Request Area -->
+            <!-- Order Note -->
             ${this.settings.showOrderNote ? `
-              <div class="cart-popup__note-drawer" data-cart-popup-note-wrapper>
-                <div class="cart-popup__note-drawer-header" data-cart-popup-note-toggle>
-                  <span>${ICONS.note} ${escapeHtml(translation.orderNote)}</span>
+              <div class="cart-popup-note-drawer" data-cart-popup-note-wrapper>
+                <div class="cart-popup-note-drawer-header" data-cart-popup-note-toggle>
+                  <span>${ICONS.note} ${esc(t.orderNote)}</span>
                   <span data-cart-popup-note-arrow>&darr;</span>
                 </div>
-                <textarea class="cart-popup__note-textarea" id="${escapeHtml(popupId)}-note" placeholder="Write any special instructions for your order..." hidden></textarea>
+                <textarea class="cart-popup-note-textarea" id="${esc(id)}-note"
+                          placeholder="Write any special instructions for your order..." hidden></textarea>
               </div>
             ` : ""}
           </div>
 
-          <!-- 4. Footer with Summary and Large Checkout Button -->
-          <footer class="cart-popup__footer" hidden>
-            <!-- Free Delivery Progress Bar -->
-            <div class="cart-popup__delivery" hidden>
-              <p class="cart-popup__delivery-message"></p>
-              <div class="cart-popup__progress" aria-hidden="true">
-                <div class="cart-popup__progress-bar"></div>
-              </div>
+          <!-- Footer -->
+          <footer class="cart-popup-footer" hidden>
+            <!-- Subtotal row -->
+            <div class="cart-popup-summary-row cart-popup-summary-row-subtotal">
+              <span>${esc(t.subtotal || "Subtotal")}</span>
+              <span class="cart-popup-subtotal" data-cart-popup-subtotal></span>
             </div>
 
-            <!-- Delivery Fee Row (from mockup) -->
-            <div class="cart-popup__summary-row cart-popup__summary-row--delivery">
-              <span>${escapeHtml(translation.deliveryFee)}</span>
-              <span class="cart-popup__delivery-fee-val">${escapeHtml(translation.free)}</span>
+            <!-- Discount row (only visible when discount applied) -->
+            <div class="cart-popup-summary-row cart-popup-summary-row-discount" data-cart-popup-discount-row hidden>
+              <span>${esc(t.voucherApplied || "Discount")} (<strong data-cart-popup-discount-code></strong>)</span>
+              <span class="cart-popup-discount-val" data-cart-popup-discount-val></span>
             </div>
 
-            <!-- Total Price Row -->
-            <div class="cart-popup__summary-row cart-popup__summary-row--total">
-              <span>${escapeHtml(translation.total)}</span>
-              <span class="cart-popup__total"></span>
+            <!-- Delivery Fee row -->
+            <div class="cart-popup-summary-row cart-popup-summary-row-delivery" data-cart-popup-delivery-row>
+              <span>${esc(t.deliveryFee || "Delivery Fee")}</span>
+              <span class="cart-popup-delivery-fee-val" data-cart-popup-delivery-val></span>
             </div>
 
-            <!-- Pill Red Checkout Button with Arrow Indicator -->
-            <a class="cart-popup__checkout" href="${escapeHtml(this.settings.checkoutUrl)}">
-              <span>${escapeHtml(this.settings.checkoutLabel)}</span>
-              <span class="cart-popup__checkout-arrow">&rsaquo;</span>
+            <!-- Total row -->
+            <div class="cart-popup-summary-row cart-popup-summary-row-total">
+              <span>${esc(t.total)}</span>
+              <span class="cart-popup-total"></span>
+            </div>
+
+            <!-- Checkout Button -->
+            <a class="cart-popup-checkout" href="${esc(this.settings.checkoutUrl)}">
+              <span>${esc(this.settings.checkoutLabel)}</span>
+              <span class="cart-popup-checkout-arrow">&rsaquo;</span>
             </a>
           </footer>
         </aside>`;
 
       document.body.append(this.root);
-
-      // Cache key element references for high performance
-      this.itemsElement = this.root.querySelector(".cart-popup__items");
-      this.emptyElement = this.root.querySelector(".cart-popup__empty");
-      this.footerElement = this.root.querySelector(".cart-popup__footer");
-      this.statusElement = this.root.querySelector(".cart-popup__status");
-      this.totalElement = this.root.querySelector(".cart-popup__total");
-      this.bulkBarElement = this.root.querySelector("[data-cart-popup-bulk-bar]");
-      this.selectAllCheckbox = this.root.querySelector("[data-cart-popup-select-all]");
-      this.bulkDeleteBtn = this.root.querySelector("[data-cart-popup-execute-delete]");
-      this.deliveryElement = this.root.querySelector(".cart-popup__delivery");
-      this.deliveryMessageElement = this.root.querySelector(".cart-popup__delivery-message");
-      this.deliveryBarElement = this.root.querySelector(".cart-popup__progress-bar");
-      this.noteElement = this.root.querySelector(".cart-popup__note-textarea");
-      this.noteToggle = this.root.querySelector("[data-cart-popup-note-toggle]");
-      this.voucherCard = this.root.querySelector("[data-cart-popup-voucher]");
+      this.cacheElements();
     }
 
-    /**
-     * Binds user interactions and listeners
-     */
+    cacheElements() {
+      const r = this.root;
+      this.itemsElement = r.querySelector(".cart-popup-items");
+      this.emptyElement = r.querySelector(".cart-popup-empty");
+      this.footerElement = r.querySelector(".cart-popup-footer");
+      this.statusElement = r.querySelector(".cart-popup-status");
+      this.subtotalElement = r.querySelector("[data-cart-popup-subtotal]");
+      this.discountRowElement = r.querySelector("[data-cart-popup-discount-row]");
+      this.discountCodeElement = r.querySelector("[data-cart-popup-discount-code]");
+      this.discountValElement = r.querySelector("[data-cart-popup-discount-val]");
+      this.totalElement = r.querySelector(".cart-popup-total");
+      this.deliveryRowElement = r.querySelector("[data-cart-popup-delivery-row]");
+      this.deliveryValElement = r.querySelector("[data-cart-popup-delivery-val]");
+      this.bulkBarElement = r.querySelector("[data-cart-popup-bulk-bar]");
+      this.selectAllCheckbox = r.querySelector("[data-cart-popup-select-all]");
+      this.bulkDeleteBtn = r.querySelector("[data-cart-popup-execute-delete]");
+      this.noteElement = r.querySelector(".cart-popup-note-textarea");
+      this.voucherWrapper = r.querySelector("[data-cart-popup-voucher-wrapper]");
+      this.voucherCard = r.querySelector("[data-cart-popup-voucher]");
+      this.voucherForm = r.querySelector("[data-cart-popup-voucher-form]");
+      this.voucherInput = r.querySelector("[data-cart-popup-voucher-input]");
+      this.voucherMsgElement = r.querySelector("[data-cart-popup-voucher-msg]");
+      this.checkoutButton = r.querySelector(".cart-popup-checkout");
+    }
+
+    /* ==============================
+     * EVENT BINDING
+     * ============================== */
     bindEvents() {
-      // Delegated clicks inside popup
-      this.root.addEventListener("click", (event) => {
-        // Close button or backdrop scrim
-        if (event.target.closest("[data-cart-popup-close]")) {
-          this.close();
+      // Delegated clicks inside drawer
+      this.root.addEventListener("click", (e) => {
+        if (e.target.closest("[data-cart-popup-close]")) { this.close(); return; }
+        if (e.target.closest("[data-cart-popup-toggle-delete]")) { this.toggleDeleteMode(); return; }
+        if (e.target.closest("[data-cart-popup-cancel-delete]")) { this.setDeleteMode(false); return; }
+        if (e.target.closest("[data-cart-popup-execute-delete]")) { this.executeBulkDelete(); return; }
+
+        const qBtn = e.target.closest("[data-cart-popup-quantity]");
+        if (qBtn) {
+          this.handleOptimisticQuantityChange(qBtn.dataset.lineKey, Number(qBtn.dataset.cartPopupQuantity));
           return;
         }
 
-        // Toggle Bulk Delete Mode
-        if (event.target.closest("[data-cart-popup-toggle-delete]")) {
-          this.toggleDeleteMode();
+        const removeBtn = e.target.closest("[data-cart-popup-remove]");
+        if (removeBtn) {
+          this.handleOptimisticQuantityChange(removeBtn.dataset.lineKey, 0);
           return;
         }
 
-        // Cancel Bulk Delete Mode
-        if (event.target.closest("[data-cart-popup-cancel-delete]")) {
-          this.setDeleteMode(false);
+        if (e.target.closest("[data-cart-popup-note-toggle]") && this.noteElement) {
+          const hidden = this.noteElement.hidden;
+          this.noteElement.hidden = !hidden;
+          if (!hidden === false) this.noteElement.focus();
           return;
         }
 
-        // Execute Bulk Delete
-        if (event.target.closest("[data-cart-popup-execute-delete]")) {
-          this.executeBulkDelete();
+        // Voucher card toggle
+        if (e.target.closest("[data-cart-popup-voucher]") && !e.target.closest("[data-cart-popup-remove-voucher]")) {
+          if (!this.appliedDiscount && this.voucherForm) {
+            this.voucherForm.hidden = !this.voucherForm.hidden;
+            if (!this.voucherForm.hidden && this.voucherInput) this.voucherInput.focus();
+          }
           return;
         }
 
-        // Quantity Increase / Decrease buttons (Optimistic UI)
-        const quantityButton = event.target.closest("[data-cart-popup-quantity]");
-        if (quantityButton) {
-          const lineKey = quantityButton.dataset.lineKey;
-          const targetQty = Number(quantityButton.dataset.cartPopupQuantity);
-          this.handleOptimisticQuantityChange(lineKey, targetQty);
+        // Voucher apply button
+        if (e.target.closest("[data-cart-popup-apply-voucher]") && this.voucherInput) {
+          const code = this.voucherInput.value.trim();
+          if (code) this.applyDiscount(code);
           return;
         }
 
-        // Single Remove button
-        const removeButton = event.target.closest("[data-cart-popup-remove]");
-        if (removeButton) {
-          const lineKey = removeButton.dataset.lineKey;
-          this.handleOptimisticQuantityChange(lineKey, 0);
+        // Voucher remove
+        if (e.target.closest("[data-cart-popup-remove-voucher]")) {
+          e.stopPropagation();
+          this.removeDiscount();
           return;
         }
 
-        // Toggle special note accordion
-        if (event.target.closest("[data-cart-popup-note-toggle]") && this.noteElement) {
-          const isHidden = this.noteElement.hidden;
-          this.noteElement.hidden = !isHidden;
-          if (!this.noteElement.hidden) this.noteElement.focus();
+        // Checkout with discount redirect
+        if (e.target.closest(".cart-popup-checkout") && this.appliedDiscount) {
+          e.preventDefault();
+          window.location.href = `/discount/${encodeURIComponent(this.appliedDiscount)}?redirect=${encodeURIComponent(this.settings.checkoutUrl)}`;
         }
       });
 
-      // Line item checkbox toggle in delete mode
-      this.root.addEventListener("change", (event) => {
-        if (event.target.matches("[data-cart-popup-item-checkbox]")) {
-          const lineKey = event.target.dataset.lineKey;
-          if (event.target.checked) {
-            this.selectedKeys.add(lineKey);
-          } else {
-            this.selectedKeys.delete(lineKey);
-          }
+      // Checkbox changes
+      this.root.addEventListener("change", (e) => {
+        if (e.target.matches("[data-cart-popup-item-checkbox]")) {
+          e.target.checked
+            ? this.selectedKeys.add(e.target.dataset.lineKey)
+            : this.selectedKeys.delete(e.target.dataset.lineKey);
           this.updateBulkActionState();
           return;
         }
-
-        if (event.target.matches("[data-cart-popup-select-all]")) {
-          const isChecked = event.target.checked;
-          const itemCheckboxes = this.root.querySelectorAll("[data-cart-popup-item-checkbox]");
+        if (e.target.matches("[data-cart-popup-select-all]")) {
+          const checked = e.target.checked;
           this.selectedKeys.clear();
-          itemCheckboxes.forEach((cb) => {
-            cb.checked = isChecked;
-            if (isChecked) this.selectedKeys.add(cb.dataset.lineKey);
+          this.root.querySelectorAll("[data-cart-popup-item-checkbox]").forEach((cb) => {
+            cb.checked = checked;
+            if (checked) this.selectedKeys.add(cb.dataset.lineKey);
           });
           this.updateBulkActionState();
         }
       });
 
-      // Global click handler to intercept theme cart clicks
-      document.addEventListener("click", (event) => {
-        const trigger = event.target.closest("[data-cart-popup-open]");
-        if (trigger) {
-          event.preventDefault();
-          this.open();
-          return;
-        }
-
-        const cartLink = event.target.closest("a[href]");
-        if (cartLink && this.isThemeCartLink(cartLink)) {
-          event.preventDefault();
-          this.open();
-        }
+      // Global: open drawer when cart link clicked
+      document.addEventListener("click", (e) => {
+        if (e.target.closest("[data-cart-popup-open]")) { e.preventDefault(); this.open(); return; }
+        const link = e.target.closest("a[href]");
+        if (link && this.isThemeCartLink(link)) { e.preventDefault(); this.open(); }
       });
 
-      // Intercept standard Add-to-cart form submissions
-      document.addEventListener("submit", (event) => {
-        const form = event.target;
-        if (!this.isProductForm(form)) return;
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        this.addProductForm(form);
+      // Intercept add-to-cart form submissions
+      document.addEventListener("submit", (e) => {
+        if (!this.isProductForm(e.target)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        this.addProductForm(e.target);
       }, true);
 
-      // Keyboard Accessibility: Escape key closes drawer
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && this.isOpen()) this.close();
+      // Escape key
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && this.isOpen()) this.close();
       });
 
-      // Debounced Order Note Auto-saving
+      // Note auto-save
       if (this.noteElement) {
         this.noteElement.addEventListener("input", () => {
           window.clearTimeout(this.noteSaveTimer);
           this.noteSaveTimer = window.setTimeout(() => this.updateNote(), 600);
         });
       }
-    }
 
-    /**
-     * ========================================================================
-     * OPTIMISTIC UI ENGINE (Instant Quantity Updates)
-     * ========================================================================
-     * Updates DOM quantity immediately when user clicks '+' or '-', recalculates
-     * totals on the fly, and debounces the network request to Shopify.
-     */
-    handleOptimisticQuantityChange(lineKey, newQuantity) {
-      const item = this.cart.items.find((i) => i.key === lineKey);
-      if (!item) return;
-
-      const lineElement = this.root.querySelector(`[data-line-item-key="${CSS.escape(lineKey)}"]`);
-      if (!lineElement) return;
-
-      if (newQuantity <= 0) {
-        // Optimistically hide line immediately
-        lineElement.style.opacity = "0.4";
-      } else {
-        // Optimistically update quantity text and buttons
-        const qtyValue = lineElement.querySelector(".cart-popup__quantity-value");
-        if (qtyValue) qtyValue.textContent = newQuantity;
-
-        const minusBtn = lineElement.querySelector("[data-cart-popup-quantity]:first-child");
-        const plusBtn = lineElement.querySelector("[data-cart-popup-quantity]:last-child");
-        if (minusBtn) minusBtn.dataset.cartPopupQuantity = newQuantity - 1;
-        if (plusBtn) plusBtn.dataset.cartPopupQuantity = newQuantity + 1;
-
-        // Optimistically update price
-        const priceElement = lineElement.querySelector(".cart-popup__price");
-        const unitPrice = item.final_price || (item.final_line_price / item.quantity);
-        if (priceElement) priceElement.textContent = this.money(unitPrice * newQuantity);
-      }
-
-      // Optimistically update subtotal & item count
-      const qtyDifference = newQuantity - item.quantity;
-      const unitPrice = item.final_price || (item.final_line_price / item.quantity);
-      this.cart.total_price += qtyDifference * unitPrice;
-      this.cart.item_count += qtyDifference;
-      item.quantity = newQuantity;
-
-      if (this.totalElement) this.totalElement.textContent = this.money(this.cart.total_price);
-      this.updateHeaderCount();
-      this.renderDeliveryProgress();
-
-      // Debounce server call for 250ms so rapid clicking doesn't lag or spam requests
-      if (this.debounceTimers.has(lineKey)) {
-        window.clearTimeout(this.debounceTimers.get(lineKey));
-      }
-
-      const timer = window.setTimeout(async () => {
-        this.debounceTimers.delete(lineKey);
-        await this.syncQuantityWithServer(lineKey, newQuantity);
-      }, 250);
-
-      this.debounceTimers.set(lineKey, timer);
-    }
-
-    /**
-     * Sends change request to Shopify Cart API and synchronizes response.
-     */
-    async syncQuantityWithServer(lineKey, quantity) {
-      try {
-        const response = await this.originalFetch(this.getCartEndpoint("change"), {
-          method: "POST",
-          headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ id: lineKey, quantity }),
+      // Enter key in voucher input
+      if (this.voucherInput) {
+        this.voucherInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const code = this.voucherInput.value.trim();
+            if (code) this.applyDiscount(code);
+          }
         });
-
-        if (!response.ok) throw new Error("Server rejected update");
-
-        this.cart = await response.json();
-        this.render();
-      } catch (error) {
-        console.error("Failed to sync quantity:", error);
-        // Fallback: reload exact cart on error
-        this.refresh();
       }
     }
 
-    /**
-     * ========================================================================
-     * BULK SELECTION & DELETION SYSTEM
-     * ========================================================================
-     */
-    toggleDeleteMode() {
-      this.setDeleteMode(!this.isDeleteMode);
+    /* ==============================
+     * RESPONSIVE LAYOUT
+     * ============================== */
+    getBreakpoint() {
+      const w = window.innerWidth;
+      if (w <= this.BREAKPOINTS.mobile) return "mobile";
+      if (w <= this.BREAKPOINTS.tablet) return "tablet";
+      return "desktop";
     }
+
+    applyResponsiveLayout() {
+      if (!this.root) return;
+      const bp = this.getBreakpoint();
+      const desktopPos = this.settings.position || "right";
+      const mobilePref = this.settings.mobilePosition || "bottom";
+      const activePos = bp === "mobile"
+        ? (mobilePref === "match_desktop" ? desktopPos : "bottom")
+        : desktopPos;
+
+      ["right", "left", "top", "bottom"].forEach((p) => this.root.classList.remove(`cart-popup-${p}`));
+      this.root.classList.add(`cart-popup-${activePos}`);
+
+      const baseWidth = Number(this.settings.panelWidth) || 420;
+      if (bp === "desktop") {
+        this.root.style.setProperty("--cart-popup-width", `${baseWidth}px`);
+      } else if (bp === "tablet") {
+        const tw = Math.max(Math.min(baseWidth, Math.round(window.innerWidth * 0.5)), 340);
+        this.root.style.setProperty("--cart-popup-width", `${tw}px`);
+      } else {
+        this.root.style.removeProperty("--cart-popup-width");
+      }
+    }
+
+    bindResizeListener() {
+      let timer = null;
+      window.addEventListener("resize", () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          if (this.isOpen()) this.close();
+          this.applyResponsiveLayout();
+        }, 150);
+      });
+    }
+
+    /* ==============================
+     * BULK DELETE MODE
+     * ============================== */
+    toggleDeleteMode() { this.setDeleteMode(!this.isDeleteMode); }
 
     setDeleteMode(active) {
       this.isDeleteMode = active;
       this.selectedKeys.clear();
-
       if (active) {
-        this.root.classList.add("cart-popup--selection-mode");
+        this.root.classList.add("cart-popup-selection-mode");
         this.bulkBarElement.hidden = false;
       } else {
-        this.root.classList.remove("cart-popup--selection-mode");
+        this.root.classList.remove("cart-popup-selection-mode");
         this.bulkBarElement.hidden = true;
       }
-
-      // Uncheck all item checkboxes
-      this.root.querySelectorAll("[data-cart-popup-item-checkbox]").forEach((cb) => {
-        cb.checked = false;
-      });
+      this.root.querySelectorAll("[data-cart-popup-item-checkbox]").forEach((cb) => { cb.checked = false; });
       if (this.selectAllCheckbox) this.selectAllCheckbox.checked = false;
-
       this.updateBulkActionState();
     }
 
     updateBulkActionState() {
-      const totalItems = this.cart.items.length;
-      const selectedCount = this.selectedKeys.size;
-
+      const total = Array.isArray(this.cart?.items) ? this.cart.items.length : 0;
+      const selected = this.selectedKeys.size;
       if (this.bulkDeleteBtn) {
-        this.bulkDeleteBtn.disabled = selectedCount === 0;
-        const deleteLabel = this.settings.translations.deleteSelected || "Delete selected";
-        this.bulkDeleteBtn.textContent = selectedCount > 0 ? `${deleteLabel} (${selectedCount})` : deleteLabel;
+        this.bulkDeleteBtn.disabled = selected === 0;
+        const label = this.settings.translations.deleteSelected || "Delete selected";
+        this.bulkDeleteBtn.textContent = selected > 0 ? `${label} (${selected})` : label;
       }
-
       if (this.selectAllCheckbox) {
-        this.selectAllCheckbox.checked = totalItems > 0 && selectedCount === totalItems;
+        this.selectAllCheckbox.checked = total > 0 && selected === total;
       }
     }
 
-    async executeBulkDelete() {
-      if (this.selectedKeys.size === 0) return;
-
-      const updates = {};
-      this.selectedKeys.forEach((key) => {
-        updates[key] = 0;
-      });
-
-      // Optimistically hide selected lines
-      this.selectedKeys.forEach((key) => {
-        const line = this.root.querySelector(`[data-line-item-key="${CSS.escape(key)}"]`);
-        if (line) line.style.opacity = "0.2";
-      });
-
-      try {
-        const response = await this.originalFetch(this.getCartEndpoint("update"), {
-          method: "POST",
-          headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ updates }),
-        });
-
-        if (!response.ok) throw new Error("Bulk delete failed");
-
-        this.cart = await response.json();
-        this.setDeleteMode(false);
-        this.render();
-      } catch (error) {
-        console.error("Bulk delete error:", error);
-        this.refresh();
+    open() {
+      if (this.isOpen()) return;
+      this.lastFocusedElement = document.activeElement;
+      this.root.classList.add("is-open");
+      this.root.querySelector(".cart-popup-panel").setAttribute("aria-hidden", "false");
+      document.body.classList.add("cart-popup-lock");
+      if (this.dynamicDeliveryFee === undefined && this.cart && this.cart.item_count > 0) {
+        this.fetchShippingRates();
       }
     }
 
-    /**
-     * ========================================================================
-     * CART RENDERING & UI SYNC
-     * ========================================================================
-     */
-    render() {
-      const hasItems = this.cart && this.cart.item_count > 0;
-
-      // Crucial Fix: Strictly toggle empty state vs items
-      if (hasItems) {
-        this.itemsElement.innerHTML = this.cart.items.map((item) => this.renderLineItem(item)).join("");
-        this.emptyElement.hidden = true;
-        this.emptyElement.style.display = "none";
-        this.footerElement.hidden = false;
-        this.footerElement.style.display = "block";
-        if (this.voucherCard) this.voucherCard.hidden = false;
-      } else {
-        this.itemsElement.innerHTML = "";
-        this.emptyElement.hidden = false;
-        this.emptyElement.style.display = "flex";
-        this.footerElement.hidden = true;
-        this.footerElement.style.display = "none";
-        if (this.voucherCard) this.voucherCard.hidden = true;
-        this.setDeleteMode(false);
+    close() {
+      if (!this.isOpen()) return;
+      this.root.classList.remove("is-open");
+      this.root.querySelector(".cart-popup-panel").setAttribute("aria-hidden", "true");
+      document.body.classList.remove("cart-popup-lock");
+      this.setDeleteMode(false);
+      if (this.lastFocusedElement instanceof HTMLElement) {
+        this.lastFocusedElement.focus({ preventScroll: true });
       }
-
-      // Update total price
-      if (this.totalElement) {
-        this.totalElement.textContent = this.money(this.cart.total_price);
-      }
-
-      // Update note value
-      if (this.noteElement && document.activeElement !== this.noteElement) {
-        this.noteElement.value = this.cart.note || "";
-      }
-
-      this.renderDeliveryProgress();
-      this.updateHeaderCount();
-      this.updateBulkActionState();
     }
 
-    /**
-     * Renders a single line item card matching the provided mockup
-     */
-    renderLineItem(item) {
-      const translation = this.settings.translations;
-      const productTitle = escapeHtml(item.product_title || item.title);
-      const variantTitle = item.variant_title && item.variant_title !== "Default Title"
-        ? `<p class="cart-popup__variant">${escapeHtml(item.variant_title)}</p>`
-        : "";
+    isOpen() { return this.root.classList.contains("is-open"); }
 
-      const image = item.image
-        ? `<img class="cart-popup__image" src="${escapeHtml(item.image)}" alt="${productTitle}" loading="lazy" width="84" height="84" />`
-        : `<div class="cart-popup__image" aria-hidden="true"></div>`;
-
-      const isChecked = this.selectedKeys.has(item.key) ? "checked" : "";
-
-      return `
-        <article class="cart-popup__line" data-line-item-key="${escapeHtml(item.key)}">
-          <!-- Selection Checkbox (Visible in Delete Mode) -->
-          <div class="cart-popup__line-checkbox">
-            <input type="checkbox" class="cart-popup__checkbox" data-cart-popup-item-checkbox data-line-key="${escapeHtml(item.key)}" ${isChecked} />
-          </div>
-
-          <!-- Product Thumbnail -->
-          <a class="cart-popup__image-link" href="${escapeHtml(item.url)}" aria-label="${productTitle}">
-            ${image}
-          </a>
-
-          <!-- Details -->
-          <div class="cart-popup__line-details">
-            <div class="cart-popup__line-header">
-              <a class="cart-popup__product-link" href="${escapeHtml(item.url)}">${productTitle}</a>
-            </div>
-            ${variantTitle}
-
-            <!-- Special Request Prompt (Matching design) -->
-            ${this.settings.showOrderNote ? `
-              <button class="cart-popup__special-request-btn" data-cart-popup-note-toggle type="button">
-                ${ICONS.note} <span>${escapeHtml(translation.addSpecialRequest || "Add Special Request")}</span>
-              </button>
-            ` : ""}
-
-            <!-- Price and Quantity Selector -->
-            <div class="cart-popup__line-footer">
-              <span class="cart-popup__price">${this.money(item.final_line_price)}</span>
-              
-              <div class="cart-popup__quantity" aria-label="${escapeHtml(translation.quantity)}">
-                <button class="cart-popup__quantity-button" data-cart-popup-quantity="${item.quantity - 1}" data-line-key="${escapeHtml(item.key)}" type="button" aria-label="${escapeHtml(translation.decreaseQuantity)}">&minus;</button>
-                <span class="cart-popup__quantity-value">${item.quantity}</span>
-                <button class="cart-popup__quantity-button" data-cart-popup-quantity="${item.quantity + 1}" data-line-key="${escapeHtml(item.key)}" type="button" aria-label="${escapeHtml(translation.increaseQuantity)}">&plus;</button>
-              </div>
-            </div>
-          </div>
-        </article>`;
-    }
-
-    /**
-     * Calculates and renders the Free Delivery Progress Bar
-     */
-    renderDeliveryProgress() {
-      const threshold = Number(this.settings.freeDeliveryThreshold);
-      if (!threshold || threshold < 1 || !this.deliveryElement) {
-        if (this.deliveryElement) this.deliveryElement.hidden = true;
-        return;
-      }
-
-      const amountRemaining = Math.max(threshold - this.cart.total_price, 0);
-      const progress = Math.min((this.cart.total_price / threshold) * 100, 100);
-
-      this.deliveryElement.hidden = false;
-      this.deliveryBarElement.style.width = `${progress}%`;
-      this.deliveryMessageElement.textContent = amountRemaining > 0
-        ? this.settings.translations.freeDeliveryRemaining.replace("{{ amount }}", this.money(amountRemaining))
-        : this.settings.translations.freeDeliveryUnlocked;
-    }
-
-    /**
-     * Replaces theme cart links with popup trigger containing custom/default icon
-     */
+    /* ==============================
+     * THEME INTEGRATION HELPERS
+     * ============================== */
     replaceThemeCartLinks() {
       if (!this.settings.showHeaderIcon) return;
-
-      const themeCartLinks = Array.from(document.querySelectorAll("a[href]")).filter((link) => this.isThemeCartLink(link));
-
-      themeCartLinks.forEach((link) => {
-        if (link.dataset.cartPopupReplaced === "true") return;
-
-        link.dataset.cartPopupReplaced = "true";
-        link.style.setProperty("display", "none", "important");
-        link.insertAdjacentElement("afterend", this.createHeaderTrigger());
-      });
+      Array.from(document.querySelectorAll("a[href]"))
+        .filter((l) => this.isThemeCartLink(l))
+        .forEach((link) => {
+          if (link.dataset.cartPopupReplaced === "true") return;
+          link.dataset.cartPopupReplaced = "true";
+          link.style.setProperty("display", "none", "important");
+          link.insertAdjacentElement("afterend", this.createHeaderTrigger());
+        });
     }
 
-    /**
-     * Generates header trigger button with uploaded custom icon or SVG fallback
-     */
     createHeaderTrigger() {
-      const trigger = document.createElement("button");
-      trigger.className = "cart-popup__header-trigger";
-      trigger.dataset.cartPopupOpen = "";
-      trigger.type = "button";
-      trigger.setAttribute("aria-label", this.settings.title);
-
-      const iconMarkup = this.settings.customIconUrl
-        ? `<img class="cart-popup__custom-icon" src="${escapeHtml(this.settings.customIconUrl)}" alt="Cart" />`
+      const ICONS = window.CartPopupIcons;
+      const btn = document.createElement("button");
+      btn.className = "cart-popup-header-trigger";
+      btn.dataset.cartPopupOpen = "";
+      btn.type = "button";
+      btn.setAttribute("aria-label", this.settings.title);
+      const icon = this.settings.customIconUrl
+        ? `<img class="cart-popup-custom-icon" src="${esc(this.settings.customIconUrl)}" alt="Cart" />`
         : ICONS.cart;
-
-      trigger.innerHTML = `${iconMarkup}<span class="cart-popup__count" data-cart-popup-count>${this.cart.item_count}</span>`;
-      return trigger;
+      const count = Number(this.cart?.item_count) || 0;
+      const countBadge = `<span class="cart-popup-count" data-cart-popup-count data-count="${count}"${count === 0 ? ' hidden style="display:none!important;"' : ""}>${count > 0 ? count : ""}</span>`;
+      btn.innerHTML = `${icon}${countBadge}`;
+      return btn;
     }
 
-    /**
-     * Hides conflicting theme drawers (such as Dawn's cart-drawer)
-     */
     hideThemeCartInterfaces() {
-      const selectors = [
-        "cart-drawer",
-        "cart-notification",
-        ".cart-drawer",
-        ".cart-notification",
-        ".drawer--cart",
-        "#CartDrawer",
-        "#CartNotification",
-      ];
-
-      document.querySelectorAll(selectors.join(",")).forEach((el) => {
+      const sel = ["cart-drawer", "cart-notification", ".cart-drawer", ".cart-notification",
+        ".drawer--cart", "#CartDrawer", "#CartNotification"];
+      document.querySelectorAll(sel.join(",")).forEach((el) => {
         if (!this.root.contains(el)) {
           el.setAttribute("aria-hidden", "true");
           el.style.setProperty("display", "none", "important");
@@ -673,166 +480,41 @@
     }
 
     watchThemeChanges() {
-      const observer = new MutationObserver(() => {
+      new MutationObserver(() => {
         this.replaceThemeCartLinks();
         this.hideThemeCartInterfaces();
-      });
-      observer.observe(document.body, { childList: true, subtree: true });
-    }
-
-    /**
-     * Intercepts window.fetch for /cart/add, /cart/change, etc., to auto-update
-     */
-    watchCartRequests() {
-      window.fetch = async (...args) => {
-        const response = await this.originalFetch(...args);
-        const url = this.getRequestUrl(args[0]);
-
-        if (this.isCartMutation(url)) {
-          window.setTimeout(() => {
-            this.refresh();
-            if (url.includes("/cart/add") && this.settings.openAfterAdd) {
-              this.open();
-            }
-          }, 50);
-        }
-
-        return response;
-      };
-    }
-
-    isCartMutation(url) {
-      return /\/cart\/(add|change|update|clear)(\.js)?(?:\?|$)/.test(url);
-    }
-
-    getRequestUrl(req) {
-      if (req instanceof Request) return req.url;
-      return String(req || "");
-    }
-
-    getCartEndpoint(action) {
-      return `${this.settings.cartUrl.replace(/\/$/, "")}/${action}.js`;
+      }).observe(document.body, { childList: true, subtree: true });
     }
 
     isThemeCartLink(link) {
       if (this.root && this.root.contains(link)) return false;
       try {
-        const url = new URL(link.href, window.location.origin);
-        const cartUrl = new URL(this.settings.cartUrl, window.location.origin);
-        return url.pathname === cartUrl.pathname;
-      } catch {
-        return false;
-      }
+        const u = new URL(link.href, window.location.origin);
+        const c = new URL(this.settings.cartUrl, window.location.origin);
+        return u.pathname === c.pathname;
+      } catch { return false; }
     }
 
     isProductForm(form) {
       if (!(form instanceof HTMLFormElement)) return false;
       const action = form.getAttribute("action") || "";
-      return action.includes("/cart/add") || Boolean(form.querySelector("[name='id']") && form.querySelector("[type='submit'], [name='add']"));
-    }
-
-    async addProductForm(form) {
-      this.setStatus("");
-      try {
-        const response = await this.originalFetch(this.getCartEndpoint("add"), {
-          method: "POST",
-          headers: { Accept: "application/json" },
-          body: new FormData(form),
-        });
-
-        if (!response.ok) throw new Error("Could not add product");
-
-        await this.refresh();
-        if (this.settings.openAfterAdd) this.open();
-      } catch (err) {
-        console.error(err);
-        this.setStatus(this.settings.translations.cartError);
-      }
-    }
-
-    async refresh() {
-      try {
-        const res = await this.originalFetch(`${this.settings.cartUrl.replace(/\/$/, "")}.js`, {
-          headers: { Accept: "application/json" },
-        });
-        if (!res.ok) throw new Error("Failed to fetch cart");
-        this.cart = await res.json();
-        this.render();
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    async updateNote() {
-      if (!this.noteElement) return;
-      try {
-        await this.originalFetch(this.getCartEndpoint("update"), {
-          method: "POST",
-          headers: {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ note: this.noteElement.value }),
-        });
-      } catch (err) {
-        console.error("Failed to update note:", err);
-      }
-    }
-
-    updateHeaderCount() {
-      document.querySelectorAll("[data-cart-popup-count]").forEach((count) => {
-        count.textContent = this.cart.item_count;
-      });
-    }
-
-    /**
-     * Formats amounts with the store currency symbol
-     */
-    money(cents) {
-      const locale = document.documentElement.lang || undefined;
-      const currency = this.cart.currency || window.Shopify?.currency?.active || "USD";
-      try {
-        return new Intl.NumberFormat(locale, { currency, style: "currency" }).format(Number(cents || 0) / 100);
-      } catch {
-        return `${(Number(cents || 0) / 100).toFixed(2)} ${currency}`;
-      }
-    }
-
-    setStatus(msg) {
-      if (this.statusElement) this.statusElement.textContent = msg;
-    }
-
-    open() {
-      if (this.isOpen()) return;
-      this.lastFocusedElement = document.activeElement;
-      this.root.classList.add("is-open");
-      this.root.querySelector(".cart-popup__panel").setAttribute("aria-hidden", "false");
-      document.body.classList.add("cart-popup-lock");
-    }
-
-    close() {
-      if (!this.isOpen()) return;
-      this.root.classList.remove("is-open");
-      this.root.querySelector(".cart-popup__panel").setAttribute("aria-hidden", "true");
-      document.body.classList.remove("cart-popup-lock");
-      this.setDeleteMode(false);
-      if (this.lastFocusedElement instanceof HTMLElement) {
-        this.lastFocusedElement.focus({ preventScroll: true });
-      }
-    }
-
-    isOpen() {
-      return this.root.classList.contains("is-open");
+      return action.includes("/cart/add") ||
+        Boolean(form.querySelector("[name='id']") && form.querySelector("[type='submit'],[name='add']"));
     }
   }
 
-  // Self-bootstrapping when DOM is ready
+  // ── Merge companion modules into CartPopup prototype ────────────────────────
+  // This makes all API + UI methods available as `this.methodName()` inside CartPopup.
+  Object.assign(CartPopup.prototype, window.CartPopupApi);
+  Object.assign(CartPopup.prototype, window.CartPopupUi);
+
+  // ── Auto-bootstrap from Liquid-injected settings scripts ────────────────────
   const start = () => {
     document.querySelectorAll("script[id^='cart-popup-settings-']").forEach((el) => {
       try {
         new CartPopup(JSON.parse(el.textContent)).init();
       } catch (err) {
-        console.error("CartPopup Init Error:", err);
+        console.error("[CartPopup] Init Error:", err);
       }
     });
   };

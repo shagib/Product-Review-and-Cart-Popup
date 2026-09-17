@@ -3,17 +3,24 @@
     "instanceId": {{ block.id | json }},
     "cartUrl": {{ routes.cart_url | json }},
     "checkoutUrl": {{ routes.root_url | append: 'checkout' | json }},
+    "initialCart": {{ cart | json }},
     "title": {{ block.settings.title | json }},
     "checkoutLabel": {{ block.settings.checkout_label | json }},
     "position": {{ block.settings.position | json }},
     "panelWidth": {{ block.settings.panel_width | json }},
+    "mobilePosition": {{ block.settings.mobile_position | json }},
     "showHeaderIcon": {{ block.settings.show_header_icon | json }},
     "openAfterAdd": {{ block.settings.open_after_add | json }},
     "showOrderNote": {{ block.settings.show_order_note | json }},
     "showVoucher": {{ block.settings.show_voucher | json }},
-    "voucherCode": {{ block.settings.voucher_code | json }},
+    "shippingAddress": {
+      "country": {{ customer.default_address.country | default: localization.country.name | default: shop.address.country | json }},
+      "countryCode": {{ customer.default_address.country_code | default: localization.country.iso_code | default: shop.address.country_code | json }},
+      "province": {{ customer.default_address.province | default: "" | json }},
+      "zip": {{ customer.default_address.zip | default: "" | json }}
+    },
+    "requiresShipping": {{ cart.requires_shipping | json }},
     "customIconUrl": {% if block.settings.custom_icon != blank %}{{ block.settings.custom_icon | image_url: width: 64 | json }}{% else %}null{% endif %},
-    "freeDeliveryThreshold": {{ block.settings.free_delivery_threshold | times: 100 | json }},
     "colors": {
       "surface": {{ block.settings.surface_color | json }},
       "accent": {{ block.settings.accent_color | json }},
@@ -34,20 +41,98 @@
       "remove": {{ 'cart_popup.remove' | t | json }},
       "subtotal": {{ 'cart_popup.subtotal' | t | json }},
       "total": {{ 'cart_popup.total' | t | json }},
-      "checkoutHint": {{ 'cart_popup.checkout_hint' | t | json }},
       "orderNote": {{ 'cart_popup.order_note' | t | json }},
       "addSpecialRequest": {{ 'cart_popup.add_special_request' | t | json }},
-      "editSpecialRequest": {{ 'cart_popup.edit_special_request' | t | json }},
       "voucherApplied": {{ 'cart_popup.voucher_applied' | t | json }},
       "deliveryFee": {{ 'cart_popup.delivery_fee' | t | json }},
       "free": {{ 'cart_popup.free' | t | json }},
-      "cartUpdated": {{ 'cart_popup.cart_updated' | t | json }},
-      "cartError": {{ 'cart_popup.cart_error' | t | json }},
-      "freeDeliveryRemaining": {{ 'cart_popup.free_delivery_remaining' | t | json }},
-      "freeDeliveryUnlocked": {{ 'cart_popup.free_delivery_unlocked' | t | json }}
+      "calculatedAtCheckout": {{ 'cart_popup.calculated_at_checkout' | t | json }},
+      "haveVoucher": {{ 'cart_popup.have_voucher' | t | json }},
+      "apply": {{ 'cart_popup.apply' | t | json }},
+      "enterVoucherCode": {{ 'cart_popup.enter_voucher_code' | t | json }},
+      "cartError": {{ 'cart_popup.cart_error' | t | json }}
     }
   }
 </script>
+
+{% if block.settings.show_header_icon %}
+  <style id="cart-popup-anti-fouc">
+    /* Prevent flash of default theme cart icon before custom icon replacement */
+    a[href="{{ routes.cart_url }}"]:not(.cart-popup-header-trigger),
+    a[href^="{{ routes.cart_url }}?"]:not(.cart-popup-header-trigger),
+    a[href="/cart"]:not(.cart-popup-header-trigger),
+    a[href^="/cart?"]:not(.cart-popup-header-trigger),
+    #cart-icon-bubble:not(.cart-popup-header-trigger),
+    .header__icon--cart:not(.cart-popup-header-trigger),
+    .site-header__cart:not(.cart-popup-header-trigger),
+    [data-cart-toggle]:not(.cart-popup-header-trigger) {
+      display: none !important;
+    }
+  </style>
+
+  <script>
+    (function() {
+      const customIconUrl = {% if block.settings.custom_icon != blank %}{{ block.settings.custom_icon | image_url: width: 64 | json }}{% else %}null{% endif %};
+      const title = {{ block.settings.title | json }} || "Cart";
+      const itemCount = {{ cart.item_count | json }} || 0;
+      const cartUrl = {{ routes.cart_url | json }} || "/cart";
+      const defaultSvg = '<svg aria-hidden="true" fill="none" height="22" viewBox="0 0 24 24" width="22"><path d="M3 4h2l2.1 10.1a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L20.5 7H6" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" /><circle cx="10" cy="20" fill="currentColor" r="1.2" /><circle cx="18" cy="20" fill="currentColor" r="1.2" /></svg>';
+
+      function createTrigger() {
+        const btn = document.createElement("button");
+        btn.className = "cart-popup-header-trigger";
+        btn.dataset.cartPopupOpen = "";
+        btn.type = "button";
+        btn.setAttribute("aria-label", title);
+        const icon = customIconUrl
+          ? '<img class="cart-popup-custom-icon" src="' + customIconUrl + '" alt="Cart" />'
+          : defaultSvg;
+        const countBadge = '<span class="cart-popup-count" data-cart-popup-count data-count="' + itemCount + '"' + (itemCount === 0 ? ' hidden style="display:none!important;"' : '') + '>' + (itemCount > 0 ? itemCount : '') + '</span>';
+        btn.innerHTML = icon + countBadge;
+        return btn;
+      }
+
+      function isCartLink(el) {
+        if (!el || el.dataset.cartPopupReplaced === "true" || el.classList.contains("cart-popup-header-trigger")) return false;
+        const href = el.getAttribute("href") || "";
+        if (href === cartUrl || href.startsWith(cartUrl + "?") || href === "/cart" || href.startsWith("/cart?")) return true;
+        if (el.id === "cart-icon-bubble" || el.classList.contains("header__icon--cart") || el.classList.contains("site-header__cart")) return true;
+        return false;
+      }
+
+      function replaceLinks() {
+        const links = document.querySelectorAll('a[href*="cart"], #cart-icon-bubble, .header__icon--cart, .site-header__cart');
+        links.forEach((link) => {
+          if (isCartLink(link)) {
+            link.dataset.cartPopupReplaced = "true";
+            link.style.setProperty("display", "none", "important");
+            link.insertAdjacentElement("afterend", createTrigger());
+          }
+        });
+      }
+
+      replaceLinks();
+
+      const observer = new MutationObserver(replaceLinks);
+      if (document.documentElement) {
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        replaceLinks();
+        setTimeout(() => observer.disconnect(), 1500);
+      }, { once: true });
+    })();
+  </script>
+{% endif %}
+
+<!-- Icons loaded first (tiny, no dependencies) -->
+<script src="{{ 'cart-popup-icons.js' | asset_url }}" defer></script>
+<!-- API module: Shopify Cart Ajax + discount auth -->
+<script src="{{ 'cart-popup-api.js' | asset_url }}" defer></script>
+<!-- UI module: rendering, money formatting, optimistic updates -->
+<script src="{{ 'cart-popup-ui.js' | asset_url }}" defer></script>
+<!-- Core: structure, events, state – bootstraps after all modules ready -->
 <script src="{{ 'cart-popup.js' | asset_url }}" defer></script>
 
 {% schema %}
@@ -81,23 +166,8 @@
     {
       "type": "checkbox",
       "id": "show_voucher",
-      "label": "Show voucher / discount bar",
+      "label": "Show voucher / discount code bar",
       "default": true
-    },
-    {
-      "type": "text",
-      "id": "voucher_code",
-      "label": "Voucher badge text",
-      "default": "WELCOME"
-    },
-    {
-      "type": "range",
-      "id": "free_delivery_threshold",
-      "label": "Free delivery threshold (store currency)",
-      "min": 0,
-      "max": 1000,
-      "step": 10,
-      "default": 0
     },
     {
       "type": "header",
@@ -106,11 +176,11 @@
     {
       "type": "select",
       "id": "position",
-      "label": "Popup slide position",
+      "label": "Slide position",
       "options": [
-        { "value": "right", "label": "Right side" },
-        { "value": "left", "label": "Left side" },
-        { "value": "top", "label": "Top slide" },
+        { "value": "right",  "label": "Right side" },
+        { "value": "left",   "label": "Left side" },
+        { "value": "top",    "label": "Top slide" },
         { "value": "bottom", "label": "Bottom drawer" }
       ],
       "default": "right"
@@ -124,6 +194,16 @@
       "step": 10,
       "unit": "px",
       "default": 420
+    },
+    {
+      "type": "select",
+      "id": "mobile_position",
+      "label": "Mobile layout",
+      "options": [
+        { "value": "bottom",        "label": "Bottom drawer (modern mobile UX)" },
+        { "value": "match_desktop", "label": "Match desktop position" }
+      ],
+      "default": "bottom"
     },
     {
       "type": "checkbox",
@@ -144,7 +224,8 @@
     {
       "type": "image_picker",
       "id": "custom_icon",
-      "label": "Custom cart icon (PNG, JPG, SVG)"
+      "label": "Custom cart icon (PNG, JPG, SVG)",
+      "visible_if": "{{ block.settings.show_header_icon == true }}"
     },
     {
       "type": "header",
