@@ -1,21 +1,5 @@
 /**
- * cart-popup.js  ← Main Bootstrap & Core Class
- *
- * Responsibilities:
- *   1. Build the drawer HTML shell (structure only)
- *   2. Cache DOM references
- *   3. Bind all user events (delegated click, keyboard, resize)
- *   4. Manage open / close / bulk-delete mode state
- *   5. Responsive layout switching
- *   6. Bootstrap instances from <script type="application/json"> tags
- *
- * Behaviour methods come from two companion files loaded BEFORE this one:
- *   - cart-popup-icons.js   → window.CartPopupIcons
- *   - cart-popup-api.js     → window.CartPopupApi  (API & discount logic)
- *   - cart-popup-ui.js      → window.CartPopupUi   (rendering & money helpers)
- *
- * All companion methods are merged into CartPopup.prototype via Object.assign()
- * at the bottom of this file, so every method is available on `this`.
+ * cart-popup.js  ← Main
  */
 (() => {
   const esc = (v) =>
@@ -26,7 +10,6 @@
   class CartPopup {
     constructor(settings) {
       this.settings = settings;
-      // Use Liquid-injected cart for zero-delay initial render
       this.cart = settings.initialCart || { item_count: 0, items: [], total_price: 0 };
 
       this.root = null;
@@ -37,7 +20,6 @@
       this.noteSaveTimer = null;
       this.originalFetch = window.fetch.bind(window);
 
-      // Restore any previously applied discount from session
       try {
         this.appliedDiscount = (sessionStorage.getItem("cart_popup_discount") || "").trim();
       } catch {
@@ -216,11 +198,7 @@
       this.checkoutButton = r.querySelector(".cart-popup-checkout");
     }
 
-    /* ==============================
-     * EVENT BINDING
-     * ============================== */
     bindEvents() {
-      // Delegated clicks inside drawer
       this.root.addEventListener("click", (e) => {
         if (e.target.closest("[data-cart-popup-close]")) { this.close(); return; }
         if (e.target.closest("[data-cart-popup-toggle-delete]")) { this.toggleDeleteMode(); return; }
@@ -246,7 +224,6 @@
           return;
         }
 
-        // Voucher card toggle
         if (e.target.closest("[data-cart-popup-voucher]") && !e.target.closest("[data-cart-popup-remove-voucher]")) {
           if (!this.appliedDiscount && this.voucherForm) {
             this.voucherForm.hidden = !this.voucherForm.hidden;
@@ -255,28 +232,24 @@
           return;
         }
 
-        // Voucher apply button
         if (e.target.closest("[data-cart-popup-apply-voucher]") && this.voucherInput) {
           const code = this.voucherInput.value.trim();
           if (code) this.applyDiscount(code);
           return;
         }
 
-        // Voucher remove
         if (e.target.closest("[data-cart-popup-remove-voucher]")) {
           e.stopPropagation();
           this.removeDiscount();
           return;
         }
 
-        // Checkout with discount redirect
         if (e.target.closest(".cart-popup-checkout") && this.appliedDiscount) {
           e.preventDefault();
           window.location.href = `/discount/${encodeURIComponent(this.appliedDiscount)}?redirect=${encodeURIComponent(this.settings.checkoutUrl)}`;
         }
       });
 
-      // Checkbox changes
       this.root.addEventListener("change", (e) => {
         if (e.target.matches("[data-cart-popup-item-checkbox]")) {
           e.target.checked
@@ -296,14 +269,12 @@
         }
       });
 
-      // Global: open drawer when cart link clicked
       document.addEventListener("click", (e) => {
         if (e.target.closest("[data-cart-popup-open]")) { e.preventDefault(); this.open(); return; }
         const link = e.target.closest("a[href]");
         if (link && this.isThemeCartLink(link)) { e.preventDefault(); this.open(); }
       });
 
-      // Intercept add-to-cart form submissions
       document.addEventListener("submit", (e) => {
         if (!this.isProductForm(e.target)) return;
         e.preventDefault();
@@ -311,12 +282,10 @@
         this.addProductForm(e.target);
       }, true);
 
-      // Escape key
       document.addEventListener("keydown", (e) => {
         if (e.key === "Escape" && this.isOpen()) this.close();
       });
 
-      // Note auto-save
       if (this.noteElement) {
         this.noteElement.addEventListener("input", () => {
           window.clearTimeout(this.noteSaveTimer);
@@ -324,7 +293,6 @@
         });
       }
 
-      // Enter key in voucher input
       if (this.voucherInput) {
         this.voucherInput.addEventListener("keydown", (e) => {
           if (e.key === "Enter") {
@@ -336,9 +304,6 @@
       }
     }
 
-    /* ==============================
-     * RESPONSIVE LAYOUT
-     * ============================== */
     getBreakpoint() {
       const w = window.innerWidth;
       if (w <= this.BREAKPOINTS.mobile) return "mobile";
@@ -380,9 +345,6 @@
       });
     }
 
-    /* ==============================
-     * BULK DELETE MODE
-     * ============================== */
     toggleDeleteMode() { this.setDeleteMode(!this.isDeleteMode); }
 
     setDeleteMode(active) {
@@ -437,9 +399,6 @@
 
     isOpen() { return this.root.classList.contains("is-open"); }
 
-    /* ==============================
-     * THEME INTEGRATION HELPERS
-     * ============================== */
     replaceThemeCartLinks() {
       if (!this.settings.showHeaderIcon) return;
       Array.from(document.querySelectorAll("a[href]"))
@@ -503,12 +462,9 @@
     }
   }
 
-  // ── Merge companion modules into CartPopup prototype ────────────────────────
-  // This makes all API + UI methods available as `this.methodName()` inside CartPopup.
   Object.assign(CartPopup.prototype, window.CartPopupApi);
   Object.assign(CartPopup.prototype, window.CartPopupUi);
 
-  // ── Auto-bootstrap from Liquid-injected settings scripts ────────────────────
   const start = () => {
     document.querySelectorAll("script[id^='cart-popup-settings-']").forEach((el) => {
       try {

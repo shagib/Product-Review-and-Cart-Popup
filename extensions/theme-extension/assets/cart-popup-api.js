@@ -1,19 +1,8 @@
 /**
  * cart-popup-api.js
- * Handles all Shopify Cart Ajax API communication:
- *   - fetch cart / refresh state
- *   - update item quantities
- *   - apply / remove discount codes (with server-side validation)
- *   - update order note
- *   - watch fetch mutations to auto-refresh
- *
- * Requires: window.CartPopupApi is called by CartPopup core after init.
- * Exports:  window.CartPopupApi (class mixin object – methods are merged into CartPopup)
+ * Handles all Shopify Cart Ajax API communication
  */
 (() => {
-  /**
-   * XSS-safe HTML escaper
-   */
   const esc = (v) =>
     String(v || "").replace(/[&<>'"]/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
@@ -28,15 +17,9 @@
           { headers: { Accept: "application/json" } }
         );
         if (!res.ok) throw new Error("Failed to fetch cart");
-        this.cart = await res.json();
+        const cartData = await res.json();
 
-        // Verify if previously saved discount is still valid/applied on this cart
-        if (this.appliedDiscount && !this._checkDiscountApplied(this.cart, this.appliedDiscount)) {
-          this.appliedDiscount = "";
-          try { sessionStorage.removeItem("cart_popup_discount"); } catch { }
-          this.updateCheckoutUrl();
-        }
-
+        await this.updateCartState(cartData);
         this.render();
         this.fetchShippingRates();
       } catch (err) {
@@ -44,36 +27,160 @@
       }
     },
 
+    _extractDiscountApplications(cart) {
+      if (!cart || !Array.isArray(cart.discount_applications)) return [];
+      return cart.discount_applications.map((app) => ({
+        title: app.title || app.description || "Discount",
+        type: app.type || "automatic",
+        targetType: app.target_type || "line_item",
+        targetSelection: app.target_selection || "all",
+        valueType: app.value_type || null,
+        value: app.value != null ? Number(app.value) : null,
+        allocationMethod: app.allocation_method || null,
+      }));
+    },
+
+    async updateCartState(cartData) {
+      this.cart = cartData;
+
+      const isEmpty = !this.cart || !this.cart.items || this.cart.items.length === 0;
+
+      if (isEmpty) {
+        this.appliedDiscount = "";
+        this.activeDiscounts = [];
+        try {
+          sessionStorage.removeItem("cart_popup_discount");
+        } catch (e) {
+          console.error(e);
+        }
+
+        if (navigator.onLine) {
+          try {
+            const clearRes = await this.originalFetch(this.getCartEndpoint("update"), {
+              method: "POST",
+              headers: { Accept: "application/json", "Content-Type": "application/json" },
+              body: JSON.stringify({ discount: "" }),
+            });
+            if (!clearRes.ok) {
+              console.error("[CartPopup] discount clear rejected with status:", clearRes.status);
+            }
+          } catch (err) {
+            console.error("[CartPopup] discount clear error:", err);
+          }
+
+          try {
+            const legacyRes = await this.originalFetch("/discount/CLEAR?redirect=/cart.js");
+            if (!legacyRes.ok) {
+              console.error("[CartPopup] legacy discount clear rejected with status:", legacyRes.status);
+            }
+          } catch (err) {
+            console.error("[CartPopup] legacy discount clear error:", err);
+          }
+        }
+
+        this.updateCheckoutUrl();
+        return;
+      }
+
+      this.activeDiscounts = this._extractDiscountApplications(this.cart);
+      const activeCodeDiscount = this.activeDiscounts.find((d) => d.type === "discount_code");
+
+      if (!this.appliedDiscount) {
+        try {
+          this.appliedDiscount = sessionStorage.getItem("cart_popup_discount") || "";
+        } catch (e) { }
+      }
+
+      if (this.appliedDiscount) {
+        const stillApplied =
+          activeCodeDiscount &&
+          activeCodeDiscount.title.trim().toUpperCase() === this.appliedDiscount.trim().toUpperCase();
+
+        if (!stillApplied) {
+          this.appliedDiscount = "";
+          try { sessionStorage.removeItem("cart_popup_discount"); } catch (e) { }
+        }
+      }
+
+      if (!this.appliedDiscount && activeCodeDiscount) {
+        try {
+          const res = await this.originalFetch(this.getCartEndpoint("update"), {
+            method: "POST",
+            headers: { Accept: "application/json", "Content-Type": "application/json" },
+            body: JSON.stringify({ discount: "" }),
+          });
+          if (res.ok) {
+            this.cart = await res.json();
+            this.activeDiscounts = this._extractDiscountApplications(this.cart);
+          } else {
+            console.error("[CartPopup] orphan discount-code clear rejected with status:", res.status);
+          }
+        } catch (err) {
+          console.error("[CartPopup] orphan discount-code clear error:", err);
+        }
+      }
+
+      this.updateCheckoutUrl();
+    },
+
     getCartEndpoint(action) {
       return `${this.settings.cartUrl.replace(/\/$/, "")}/${action}.js`;
     },
 
     async syncQuantityWithServer(lineKey, quantity) {
+      const lineElement = this.root ? this.root.querySelector(`[data-line-item-key="${CSS.escape(lineKey)}"]`) : null;
+      const footerElement = this.root ? this.root.querySelector(".cart-popup-footer") : null;
+
+      if (lineElement) {
+        lineElement.classList.add("is-updating");
+        lineElement.querySelectorAll("button").forEach((btn) => (btn.disabled = true));
+      }
+      if (footerElement) footerElement.classList.add("is-updating");
+
       try {
+        const payload = {
+          id: lineKey,
+          quantity: Number(quantity)
+        };
+
         const res = await this.originalFetch(this.getCartEndpoint("change"), {
           method: "POST",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ id: lineKey, quantity }),
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new Error("Server rejected update");
-        this.cart = await res.json();
+
+        if (!res.ok) {
+          throw new Error(`Server rejected update with status: ${res.status}`);
+        }
+
+        const cartData = await res.json();
+        await this.updateCartState(cartData);
         this.render();
         this.fetchShippingRates();
       } catch (err) {
         console.error("[CartPopup] quantity sync error:", err);
-        this.refresh();
+        await this.refresh();
+      } finally {
+        if (lineElement) {
+          lineElement.classList.remove("is-updating");
+          lineElement.querySelectorAll("button").forEach((btn) => (btn.disabled = false));
+        }
+        if (footerElement) footerElement.classList.remove("is-updating");
       }
     },
 
     async executeBulkDelete() {
-      if (this.selectedKeys.size === 0) return;
+      if (!this.selectedKeys || this.selectedKeys.size === 0) return;
 
       const updates = {};
       this.selectedKeys.forEach((key) => { updates[key] = 0; });
 
       this.selectedKeys.forEach((key) => {
-        const line = this.root.querySelector(`[data-line-item-key="${CSS.escape(key)}"]`);
-        if (line) line.style.opacity = "0.2";
+        const line = this.root ? this.root.querySelector(`[data-line-item-key="${CSS.escape(key)}"]`) : null;
+        if (line) line.classList.add("is-updating");
       });
 
       try {
@@ -83,18 +190,22 @@
           body: JSON.stringify({ updates }),
         });
         if (!res.ok) throw new Error("Bulk delete failed");
-        this.cart = await res.json();
-        this.setDeleteMode(false);
+
+        const cartData = await res.json();
+        if (typeof this.setDeleteMode === "function") {
+          this.setDeleteMode(false);
+        }
+        await this.updateCartState(cartData);
         this.render();
         this.fetchShippingRates();
       } catch (err) {
         console.error("[CartPopup] bulk delete error:", err);
-        this.refresh();
+        await this.refresh();
       }
     },
 
     async addProductForm(form) {
-      this.setStatus("");
+      if (typeof this.setStatus === "function") this.setStatus("");
       try {
         const res = await this.originalFetch(this.getCartEndpoint("add"), {
           method: "POST",
@@ -103,10 +214,12 @@
         });
         if (!res.ok) throw new Error("Could not add product");
         await this.refresh();
-        if (this.settings.openAfterAdd) this.open();
+        if (this.settings.openAfterAdd && typeof this.open === "function") this.open();
       } catch (err) {
         console.error(err);
-        this.setStatus(this.settings.translations.cartError);
+        if (typeof this.setStatus === "function") {
+          this.setStatus(this.settings.translations?.cartError || "Error adding product");
+        }
       }
     },
 
@@ -123,15 +236,10 @@
       }
     },
 
-    /* ------------------------------------------------------------------
-     * Discount Code Verification & Server Authentication
-     * ------------------------------------------------------------------ */
-
     _checkDiscountApplied(cart, code) {
       if (!cart || !code) return false;
       const target = code.trim().toUpperCase();
 
-      // Primary check: Shopify's discount_codes[].applicable boolean
       if (Array.isArray(cart.discount_codes) && cart.discount_codes.length > 0) {
         const entry = cart.discount_codes.find((d) => {
           const c = (typeof d === "string" ? d : (d.code || "")).trim().toUpperCase();
@@ -143,7 +251,6 @@
         }
       }
 
-      // Fallback 1: discount_applications
       if (Array.isArray(cart.discount_applications) && cart.discount_applications.length > 0) {
         const match = cart.discount_applications.some((d) => {
           const title = (d.title || d.key || d.code || "").trim().toUpperCase();
@@ -152,7 +259,6 @@
         if (match) return true;
       }
 
-      // Fallback 2: line-level discount allocations
       if (Array.isArray(cart.items)) {
         const match = cart.items.some((item) => {
           if (Array.isArray(item.line_level_discount_allocations)) {
@@ -177,14 +283,16 @@
 
     async applyDiscount(code) {
       const cleanCode = (code || "").toUpperCase().trim();
-      this.clearVoucherMessage();
+      if (typeof this.clearVoucherMessage === "function") this.clearVoucherMessage();
 
       if (!cleanCode) {
-        this.showVoucherMessage("Please enter a discount code.", true);
+        if (typeof this.showVoucherMessage === "function") {
+          this.showVoucherMessage("Please enter a discount code.", true);
+        }
         return;
       }
 
-      const applyBtn = this.root.querySelector("[data-cart-popup-apply-voucher]");
+      const applyBtn = this.root ? this.root.querySelector("[data-cart-popup-apply-voucher]") : null;
       const originalBtnHTML = applyBtn ? applyBtn.innerHTML : "";
       if (applyBtn) {
         applyBtn.disabled = true;
@@ -204,8 +312,8 @@
             const err = await res.json();
             if (err.description) msg = err.description;
             else if (err.message) msg = err.message;
-          } catch {}
-          this.showVoucherMessage(msg, true);
+          } catch { }
+          if (typeof this.showVoucherMessage === "function") this.showVoucherMessage(msg, true);
           return;
         }
 
@@ -220,28 +328,33 @@
           });
 
           this.appliedDiscount = "";
-          try { sessionStorage.removeItem("cart_popup_discount"); } catch {}
+          try { sessionStorage.removeItem("cart_popup_discount"); } catch { }
           this.updateCheckoutUrl();
 
-          this.showVoucherMessage(
-            `Discount code "${esc(cleanCode)}" is invalid or not applicable to your cart.`,
-            true
-          );
+          if (typeof this.showVoucherMessage === "function") {
+            this.showVoucherMessage(
+              `This code "${esc(cleanCode)}" is invalid.`,
+              true
+            );
+          }
           await this.refresh();
           return;
         }
 
         this.cart = updatedCart;
         this.appliedDiscount = cleanCode;
-        try { sessionStorage.setItem("cart_popup_discount", cleanCode); } catch {}
+        this.activeDiscounts = this._extractDiscountApplications(updatedCart);
+        try { sessionStorage.setItem("cart_popup_discount", cleanCode); } catch { }
 
         try {
           await this.originalFetch(`/discount/${encodeURIComponent(cleanCode)}?redirect=/cart.js`);
-        } catch {}
+        } catch { }
 
         const discountAmt = updatedCart.total_discount || 0;
-        const savingsText = discountAmt > 0 ? ` (${this.money(discountAmt)} saved)` : "";
-        this.showVoucherMessage(`Code "${esc(cleanCode)}" applied! ✓${savingsText}`, false);
+        const savingsText = discountAmt > 0 && typeof this.money === "function" ? ` (${this.money(discountAmt)} saved)` : "";
+        if (typeof this.showVoucherMessage === "function") {
+          this.showVoucherMessage(`Code "${esc(cleanCode)}" applied! ✓${savingsText}`, false);
+        }
 
         this.updateCheckoutUrl();
         this.render();
@@ -249,18 +362,20 @@
 
       } catch (err) {
         console.error("[CartPopup] discount apply error:", err);
-        this.showVoucherMessage("Failed to apply discount. Please try again.", true);
+        if (typeof this.showVoucherMessage === "function") {
+          this.showVoucherMessage("Failed to apply discount. Please try again.", true);
+        }
       } finally {
         if (applyBtn) {
           applyBtn.disabled = false;
-          applyBtn.innerHTML = originalBtnHTML || (this.settings.translations.apply || "Apply");
+          applyBtn.innerHTML = originalBtnHTML || (this.settings.translations?.apply || "Apply");
         }
       }
     },
 
     async removeDiscount() {
       this.appliedDiscount = "";
-      this.clearVoucherMessage();
+      if (typeof this.clearVoucherMessage === "function") this.clearVoucherMessage();
       if (this.voucherInput) this.voucherInput.value = "";
       try {
         sessionStorage.removeItem("cart_popup_discount");
@@ -269,8 +384,10 @@
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({ discount: "" }),
         });
-        if (res.ok) this.cart = await res.json();
-        // Also clear Shopify session cookie
+        if (res.ok) {
+          this.cart = await res.json();
+          this.activeDiscounts = this._extractDiscountApplications(this.cart);
+        }
         await this.originalFetch("/discount/CLEAR?redirect=/cart.js");
       } catch (err) {
         console.error("[CartPopup] discount remove error:", err);
@@ -281,16 +398,11 @@
 
     updateCheckoutUrl() {
       if (!this.checkoutButton) return;
-      const base = this.settings.checkoutUrl;
+      const base = this.settings.checkoutUrl || "/checkout";
       this.checkoutButton.href = this.appliedDiscount
         ? `/discount/${encodeURIComponent(this.appliedDiscount)}?redirect=${encodeURIComponent(base)}`
         : base;
     },
-
-    /* ------------------------------------------------------------------
-     * Dynamic Delivery / Shipping Rates API
-     * Fetches store's real shipping rates from Shopify Ajax Cart API.
-     * ------------------------------------------------------------------ */
 
     async fetchShippingRates() {
       const items = this.cart?.items || [];
@@ -299,7 +411,7 @@
       if (items.length === 0 || !requiresShipping) {
         this.dynamicDeliveryFee = 0;
         this.shippingRateTitle = "";
-        this.renderTotals();
+        if (typeof this.renderTotals === "function") this.renderTotals();
         return;
       }
 
@@ -322,7 +434,6 @@
           headers: { Accept: "application/json" },
         });
 
-        // If Shopify requests asynchronous calculation
         if (res.status === 202) {
           await this.originalFetch(`${baseUrl}/prepare_shipping_rates.json`, {
             method: "POST",
@@ -358,7 +469,7 @@
             }
             this.dynamicDeliveryFee = Math.round(parseFloat(minRate.price) * 100);
             this.shippingRateTitle = minRate.presentment_title || minRate.title || minRate.name || "";
-            this.renderTotals();
+            if (typeof this.renderTotals === "function") this.renderTotals();
             return;
           }
         }
@@ -366,24 +477,28 @@
         console.warn("[CartPopup] dynamic delivery fee fetch error:", err);
       }
 
-      // If rates cannot be calculated for the destination
       this.dynamicDeliveryFee = null;
       this.shippingRateTitle = "";
-      this.renderTotals();
+      if (typeof this.renderTotals === "function") this.renderTotals();
     },
 
-    /* ------------------------------------------------------------------
-     * Fetch Watcher – auto-refresh on any cart mutation from theme code
-     * ------------------------------------------------------------------ */
-
     watchCartRequests() {
+      if (window.__cartPopupFetchPatched) return;
+      window.__cartPopupFetchPatched = true;
+
+      if (!this.originalFetch) {
+        this.originalFetch = window.fetch.bind(window);
+      }
+
       window.fetch = async (...args) => {
         const response = await this.originalFetch(...args);
         const url = this._getRequestUrl(args[0]);
         if (this._isCartMutation(url)) {
           window.setTimeout(() => {
             this.refresh();
-            if (url.includes("/cart/add") && this.settings.openAfterAdd) this.open();
+            if (url.includes("/cart/add") && this.settings.openAfterAdd && typeof this.open === "function") {
+              this.open();
+            }
           }, 50);
         }
         return response;

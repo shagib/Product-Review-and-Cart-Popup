@@ -1,30 +1,17 @@
 /**
  * cart-popup-ui.js
  * Handles all DOM rendering, HTML generation and UI state for the Cart Popup drawer.
- *
- * Requires:
- *   - window.CartPopupIcons  (loaded by cart-popup-icons.js)
- *   - window.CartPopupApi    (loaded by cart-popup-api.js)
- *
- * Exports: window.CartPopupUi (object with render methods, merged into CartPopup)
  */
 (() => {
-  /**
-   * XSS-safe HTML escaper
-   */
   const esc = (v) =>
     String(v || "").replace(/[&<>'"]/g, (c) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
     })[c]);
 
   window.CartPopupUi = {
-
-    /* ------------------------------------------------------------------
-     * Money Formatter
-     * ------------------------------------------------------------------ */
     money(cents) {
       const locale = document.documentElement.lang || undefined;
-      const currency = this.cart.currency || window.Shopify?.currency?.active || "USD";
+      const currency = this.cart?.currency || window.Shopify?.currency?.active || "USD";
       try {
         return new Intl.NumberFormat(locale, { currency, style: "currency" }).format(
           Number(cents || 0) / 100
@@ -34,10 +21,74 @@
       }
     },
 
-    /* ------------------------------------------------------------------
-     * Subtotal Calculator
-     * Computes sum directly from line items to avoid stale cart.total_price.
-     * ------------------------------------------------------------------ */
+    _isGiftLine(item) {
+      if (item && item.properties && typeof item.properties === "object") {
+        const hasGiftProp = Object.keys(item.properties).some((k) =>
+          /^_.*gift.*$/i.test(k)
+        );
+        if (hasGiftProp) return true;
+      }
+
+      const orig = Number(item?.original_line_price);
+      const final = Number(item?.final_line_price);
+      const hasAllocation =
+        Array.isArray(item?.line_level_discount_allocations) &&
+        item.line_level_discount_allocations.length > 0;
+      return orig > 0 && final === 0 && hasAllocation;
+    },
+
+    _getActiveDiscounts() {
+      if (typeof this._extractDiscountApplications === "function") {
+        return this._extractDiscountApplications(this.cart);
+      }
+      return Array.isArray(this.activeDiscounts) ? this.activeDiscounts : [];
+    },
+
+    getDiscountDetails(totalDiscount) {
+      if (!totalDiscount || totalDiscount <= 0) return null;
+
+      const discounts = this._getActiveDiscounts().filter((d) => d.targetType !== "shipping_line");
+
+      let grossSubtotal = 0;
+      if (this.cart && Array.isArray(this.cart.items)) {
+        grossSubtotal = this.cart.items.reduce((sum, item) => {
+          const qty = Number(item.quantity) || 1;
+          const orig = Number(item.original_line_price ?? (item.original_price * qty)) || 0;
+          return sum + orig;
+        }, 0);
+      }
+
+      if (grossSubtotal <= 0) {
+        grossSubtotal = Number(this.cart?.original_total_price) || (Number(this.cart?.total_price) + totalDiscount);
+      }
+
+      const overallPercentage = grossSubtotal > 0 ? Math.round((totalDiscount / grossSubtotal) * 100) : 0;
+
+      const codeEntry = discounts.find((d) => d.type === "discount_code");
+      const autoEntries = discounts.filter((d) => d.type !== "discount_code");
+
+      const labelParts = [];
+      if (codeEntry) labelParts.push(codeEntry.title);
+      autoEntries.forEach((d) => {
+        if (!labelParts.includes(d.title)) labelParts.push(d.title);
+      });
+
+      let percentageLabel = null;
+      if (discounts.length === 1 && discounts[0].valueType === "percentage" && discounts[0].value != null) {
+        const v = Math.round(Math.abs(discounts[0].value));
+        percentageLabel = v > 0 ? `${v}% OFF` : null;
+      } else if (overallPercentage > 0) {
+        percentageLabel = `${overallPercentage}% OFF`;
+      }
+
+      return {
+        code: labelParts.length ? labelParts.join(" + ") : (this.appliedDiscount || "DISCOUNT"),
+        amountFormatted: this.money(totalDiscount),
+        percentage: percentageLabel,
+        hasRemovableCode: Boolean(codeEntry),
+      };
+    },
+
     getCartSubtotal() {
       if (this.cart && Array.isArray(this.cart.items) && this.cart.items.length > 0) {
         const computed = this.cart.items.reduce((sum, item) => {
@@ -50,9 +101,6 @@
       return Number(this.cart?.total_price) || 0;
     },
 
-    /* ------------------------------------------------------------------
-     * Main Render – called after every cart state change
-     * ------------------------------------------------------------------ */
     render() {
       const hasItems =
         this.cart &&
@@ -79,7 +127,12 @@
         this.setDeleteMode(false);
       }
 
-      // Render totals (subtotal, dynamic delivery fee, total)
+      if (!this.appliedDiscount) {
+        try {
+          this.appliedDiscount = sessionStorage.getItem("cart_popup_discount") || "";
+        } catch (e) { }
+      }
+
       this.renderTotals();
 
       if (this.noteElement && document.activeElement !== this.noteElement) {
@@ -92,11 +145,9 @@
       this.updateBulkActionState();
     },
 
-    /* ------------------------------------------------------------------
-     * Totals Renderer (Subtotal, Discount, Dynamic Delivery Fee, Total)
-     * ------------------------------------------------------------------ */
     renderTotals() {
-      // 1. Calculate original gross subtotal (before discounts)
+      this.activeDiscounts = this._getActiveDiscounts();
+
       let originalSubtotal = 0;
       let lineDiscounts = 0;
 
@@ -116,25 +167,32 @@
         originalSubtotal = Number(this.cart?.original_total_price) || Number(this.cart?.total_price) || 0;
       }
 
-      // Total discount = cart.total_discount (or sum of item discounts)
       const totalDiscount = Number(this.cart?.total_discount) || lineDiscounts;
 
-      // Net subtotal after discounts
       const discountedSubtotal = Math.max(0, originalSubtotal - totalDiscount);
-      this.cart.total_price = discountedSubtotal;
+      if (this.cart) {
+        this.cart.total_price = discountedSubtotal;
+      }
 
-      // Subtotal display (Gross)
       if (this.subtotalElement) {
         this.subtotalElement.textContent = this.money(originalSubtotal);
       }
 
-      // Discount row display
       if (this.discountRowElement) {
-        if (this.appliedDiscount && totalDiscount > 0) {
+        const discountInfo = this.getDiscountDetails(totalDiscount);
+
+        if (discountInfo) {
           this.discountRowElement.hidden = false;
           this.discountRowElement.style.display = "flex";
-          if (this.discountCodeElement) this.discountCodeElement.textContent = this.appliedDiscount;
-          if (this.discountValElement) this.discountValElement.textContent = `-${this.money(totalDiscount)}`;
+
+          if (this.discountCodeElement) {
+            const badgeText = discountInfo.percentage ? `<small class="cart-popup-discount-pct">(${discountInfo.percentage})</small>` : "";
+            this.discountCodeElement.innerHTML = `${esc(discountInfo.code)} ${badgeText}`;
+          }
+
+          if (this.discountValElement) {
+            this.discountValElement.textContent = `-${discountInfo.amountFormatted}`;
+          }
         } else {
           this.discountRowElement.hidden = true;
           this.discountRowElement.style.display = "none";
@@ -164,9 +222,6 @@
       }
     },
 
-    /* ------------------------------------------------------------------
-     * Line Item HTML Generator
-     * ------------------------------------------------------------------ */
     renderLineItem(item) {
       const ICONS = window.CartPopupIcons;
       const t = this.settings.translations;
@@ -182,15 +237,49 @@
 
       const isChecked = this.selectedKeys.has(item.key) ? "checked" : "";
 
-      const hasLineDiscount =
-        Number(item.original_line_price) > Number(item.final_line_price);
+      const origLinePrice = Number(item.original_line_price);
+      const finalLinePrice = Number(item.final_line_price);
 
-      const priceHtml = hasLineDiscount
-        ? `<span class="cart-popup-price">
-             <s class="cart-popup-price-original">${this.money(item.original_line_price)}</s>
-             <span class="cart-popup-price-discounted">${this.money(item.final_line_price)}</span>
-           </span>`
-        : `<span class="cart-popup-price">${this.money(item.final_line_price ?? item.original_line_price)}</span>`;
+      const hasDiscountAllocation = Array.isArray(item.line_level_discount_allocations) && item.line_level_discount_allocations.length > 0;
+
+      const anyDiscountActive = this._getActiveDiscounts().length > 0 || Boolean(this.appliedDiscount);
+      const hasLineDiscount = origLinePrice > finalLinePrice && (hasDiscountAllocation || anyDiscountActive);
+
+      const isGiftLine = this._isGiftLine(item);
+
+      let priceHtml = "";
+      let quantityControlsDisabled = false;
+
+      if (isGiftLine) {
+        quantityControlsDisabled = true;
+        priceHtml = `
+          <span class="cart-popup-price">
+            <span class="item-price-info">
+              ${origLinePrice > 0 ? `<s class="cart-popup-price-original">${this.money(origLinePrice)}</s>` : ""}
+              <span class="cart-popup-item-badge cart-popup-item-badge-gift">${esc(t.freeGift || "FREE GIFT")}</span>
+            </span> 
+            
+            <span class="cart-popup-price-discounted">${this.money(0)}</span>
+          </span>`;
+      } else if (hasLineDiscount) {
+        const lineSavings = origLinePrice - finalLinePrice;
+        const itemPct = origLinePrice > 0 ? Math.round((lineSavings / origLinePrice) * 100) : 0;
+        const badgeHtml = itemPct > 0 ? `<span class="cart-popup-item-badge">${itemPct}% OFF</span>` : "";
+
+        priceHtml = `
+          <span class="cart-popup-price">
+            <span class="item-price-info">
+              <s class="cart-popup-price-original">${this.money(origLinePrice)}</s>
+              ${badgeHtml}
+            </span> 
+            
+            <span class="cart-popup-price-discounted">${this.money(finalLinePrice)}</span>
+          </span>`;
+      } else {
+        priceHtml = `<span class="cart-popup-price">${this.money(finalLinePrice || origLinePrice)}</span>`;
+      }
+
+      const qtyDisabledAttr = quantityControlsDisabled ? "disabled" : "";
 
       return `
         <article class="cart-popup-line" data-line-item-key="${esc(item.key)}">
@@ -207,21 +296,21 @@
             </div>
             ${variantTitle}
             ${this.settings.showOrderNote
-              ? `<button class="cart-popup-special-request-btn" data-cart-popup-note-toggle type="button">
+          ? `<button class="cart-popup-special-request-btn" data-cart-popup-note-toggle type="button">
                   ${ICONS.note} <span>${esc(t.addSpecialRequest || "Add Special Request")}</span>
                  </button>`
-              : ""}
+          : ""}
             <div class="cart-popup-line-footer">
               ${priceHtml}
               <div class="cart-popup-quantity" aria-label="${esc(t.quantity)}">
                 <button class="cart-popup-quantity-button"
                   data-cart-popup-quantity="${item.quantity - 1}"
-                  data-line-key="${esc(item.key)}" type="button"
+                  data-line-key="${esc(item.key)}" type="button" ${qtyDisabledAttr}
                   aria-label="${esc(t.decreaseQuantity)}">&minus;</button>
                 <span class="cart-popup-quantity-value">${item.quantity}</span>
                 <button class="cart-popup-quantity-button"
                   data-cart-popup-quantity="${item.quantity + 1}"
-                  data-line-key="${esc(item.key)}" type="button"
+                  data-line-key="${esc(item.key)}" type="button" ${qtyDisabledAttr}
                   aria-label="${esc(t.increaseQuantity)}">&plus;</button>
               </div>
             </div>
@@ -229,25 +318,48 @@
         </article>`;
     },
 
-    /* ------------------------------------------------------------------
-     * Voucher UI Renderer
-     * ------------------------------------------------------------------ */
     renderVoucher() {
       if (!this.voucherWrapper || !this.voucherCard) return;
       const ICONS = window.CartPopupIcons;
       const t = this.settings.translations;
       const code = this.appliedDiscount;
 
+      const autoDiscounts = this._getActiveDiscounts().filter(
+        (d) => d.type !== "discount_code" && d.targetType !== "shipping_line"
+      );
+      const shippingDiscount = this._getActiveDiscounts().find((d) => d.targetType === "shipping_line");
+
+      const autoNote = autoDiscounts.length
+        ? `<div class="cart-popup-voucher-auto-note">${esc(t.autoDiscountApplied || "Also applied automatically")}: ${esc(autoDiscounts.map((d) => d.title).join(", "))}</div>`
+        : "";
+      const shippingNote = shippingDiscount
+        ? `<div class="cart-popup-voucher-auto-note">${esc(t.freeShippingApplied || "Free shipping applied")}: ${esc(shippingDiscount.title)}</div>`
+        : "";
+
       if (code) {
         this.voucherCard.innerHTML = `
           <div class="cart-popup-voucher-left">
             ${ICONS.voucher}
-            <span>${esc(t.voucherApplied)}: <strong class="cart-popup-voucher-code-badge">${esc(code)}</strong></span>
+            <span>${esc(t.voucherApplied || "Voucher Applied")}: <strong class="cart-popup-voucher-code-badge">${esc(code)}</strong></span>
           </div>
           <button type="button" class="cart-popup-voucher-remove-btn"
-            data-cart-popup-remove-voucher aria-label="Remove discount" title="Remove">&times;</button>`;
+            data-cart-popup-remove-voucher aria-label="Remove discount" title="Remove">&times;</button>
+          ${autoNote}${shippingNote}`;
         this.voucherCard.classList.add("is-applied");
         if (this.voucherForm) this.voucherForm.hidden = true;
+      } else if (autoDiscounts.length || shippingDiscount) {
+
+        this.voucherCard.innerHTML = `
+          <div class="cart-popup-voucher-left">
+            ${ICONS.voucher}
+            <span>${autoDiscounts.length
+            ? esc(autoDiscounts.map((d) => d.title).join(", ")) + " " + esc(t.autoApplied || "applied automatically")
+            : esc(t.freeShippingApplied || "Free shipping applied")}</span>
+          </div>
+          ${shippingDiscount && autoDiscounts.length ? shippingNote : ""}`;
+        this.voucherCard.classList.add("is-applied");
+
+        if (this.voucherForm) this.voucherForm.hidden = false;
       } else {
         this.voucherCard.innerHTML = `
           <div class="cart-popup-voucher-left">
@@ -259,9 +371,6 @@
       }
     },
 
-    /* ------------------------------------------------------------------
-     * Voucher Message Display
-     * ------------------------------------------------------------------ */
     showVoucherMessage(text, isError = true) {
       if (!this.voucherMsgElement) return;
       this.voucherMsgElement.textContent = text;
@@ -275,13 +384,12 @@
       this.voucherMsgElement.hidden = true;
     },
 
-    /* ------------------------------------------------------------------
-     * Optimistic Quantity Update (instant UI, then sync to server)
-     * ------------------------------------------------------------------ */
     handleOptimisticQuantityChange(lineKey, newQuantity) {
       if (!Array.isArray(this.cart?.items)) return;
       const item = this.cart.items.find((i) => i.key === lineKey);
       if (!item) return;
+
+      if (this._isGiftLine(item)) return;
 
       const lineElement = this.root.querySelector(`[data-line-item-key="${CSS.escape(lineKey)}"]`);
       if (!lineElement) return;
@@ -293,25 +401,22 @@
         if (qtyValue) qtyValue.textContent = newQuantity;
 
         const minusBtn = lineElement.querySelector("[data-cart-popup-quantity]:first-child");
-        const plusBtn  = lineElement.querySelector("[data-cart-popup-quantity]:last-child");
+        const plusBtn = lineElement.querySelector("[data-cart-popup-quantity]:last-child");
         if (minusBtn) minusBtn.dataset.cartPopupQuantity = newQuantity - 1;
-        if (plusBtn)  plusBtn.dataset.cartPopupQuantity  = newQuantity + 1;
+        if (plusBtn) plusBtn.dataset.cartPopupQuantity = newQuantity + 1;
 
-        const priceElement = lineElement.querySelector(".cart-popup-price");
         const unitPrice = item.final_price || (item.final_line_price / (item.quantity || 1));
+        const priceElement = lineElement.querySelector(".cart-popup-price-discounted") || lineElement.querySelector(".cart-popup-price");
         if (priceElement) priceElement.textContent = this.money(unitPrice * newQuantity);
       }
 
-      // Mutate local cart state
       item.quantity = newQuantity;
       this.cart.item_count = this.cart.items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
       this.cart.total_price = this.getCartSubtotal();
 
-      // Recalculate totals
       this.renderTotals();
       this.updateHeaderCount();
 
-      // Debounce server sync
       if (this.debounceTimers.has(lineKey)) window.clearTimeout(this.debounceTimers.get(lineKey));
       const timer = window.setTimeout(async () => {
         this.debounceTimers.delete(lineKey);
@@ -320,9 +425,6 @@
       this.debounceTimers.set(lineKey, timer);
     },
 
-    /* ------------------------------------------------------------------
-     * Header Cart Count Badge
-     * ------------------------------------------------------------------ */
     updateHeaderCount() {
       const count = Number(this.cart?.item_count) || 0;
       document.querySelectorAll("[data-cart-popup-count]").forEach((el) => {
@@ -341,7 +443,6 @@
         }
       });
     },
-
 
     setStatus(msg) {
       if (this.statusElement) this.statusElement.textContent = msg;
